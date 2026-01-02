@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server } from 'lucide-react'
+import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon } from 'lucide-react'
 import { etcdApi, type EtcdKey } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
@@ -28,6 +28,11 @@ function App() {
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme')
+    if (saved) return saved === 'dark'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  })
   
   // Dialog states
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
@@ -46,24 +51,24 @@ function App() {
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
   
-  // History state
-  interface OperationHistory {
-    id: string
-    type: 'create' | 'update' | 'delete'
-    key: string
-    oldValue?: string
-    newValue?: string
-    timestamp: Date
-  }
-  
-  const [history, setHistory] = useState<OperationHistory[]>([])
-  const [historyIndex, setHistoryIndex] = useState(-1)
-  
   // View state
   type View = 'keys' | 'clusters' | 'watch'
   const [activeView, setActiveView] = useState<View>('keys')
   
   const { toast } = useToast()
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light')
+  }, [isDarkMode])
+
+  const toggleTheme = () => {
+    setIsDarkMode(!isDarkMode)
+  }
 
   useEffect(() => {
     fetchKeys()
@@ -175,13 +180,6 @@ function App() {
     try {
       await etcdApi.createKey(newKey.trim(), newValue)
       
-      // Add to history
-      addToHistory({
-        type: 'create',
-        key: newKey.trim(),
-        newValue: newValue
-      })
-      
       toast({
         title: 'Success',
         description: 'Key created successfully',
@@ -203,19 +201,8 @@ function App() {
   const handleEditKey = async () => {
     if (!selectedKey) return
     
-    // Get old value before updating
-    const oldKeyData = keys.find(k => k.key === selectedKey)
-
     try {
       await etcdApi.updateKey(selectedKey, editValue)
-      
-      // Add to history
-      addToHistory({
-        type: 'update',
-        key: selectedKey,
-        oldValue: oldKeyData?.value,
-        newValue: editValue
-      })
       
       toast({
         title: 'Success',
@@ -235,18 +222,8 @@ function App() {
   const handleDeleteKey = async () => {
     if (!selectedKey) return
     
-    // Get old value before deleting
-    const oldKeyData = keys.find(k => k.key === selectedKey)
-
     try {
       await etcdApi.deleteKey(selectedKey)
-      
-      // Add to history
-      addToHistory({
-        type: 'delete',
-        key: selectedKey,
-        oldValue: oldKeyData?.value
-      })
       
       toast({
         title: 'Success',
@@ -306,89 +283,6 @@ function App() {
   }
 
   // Import/Export functions
-  const addToHistory = (operation: Omit<OperationHistory, 'id' | 'timestamp'>) => {
-    const newOperation: OperationHistory = {
-      ...operation,
-      id: crypto.randomUUID(),
-      timestamp: new Date()
-    }
-    
-    // Truncate history if we're not at the latest point
-    const newHistory = history.slice(0, historyIndex + 1)
-    newHistory.push(newOperation)
-    
-    setHistory(newHistory)
-    setHistoryIndex(newHistory.length - 1)
-  }
-
-  const undo = async () => {
-    if (historyIndex < 0) return
-    
-    const operation = history[historyIndex]
-    setHistoryIndex(historyIndex - 1)
-    
-    try {
-      if (operation.type === 'create') {
-        // Undo create: delete the key
-        await etcdApi.deleteKey(operation.key)
-      } else if (operation.type === 'update') {
-        // Undo update: restore old value
-        await etcdApi.updateKey(operation.key, operation.oldValue || '')
-      } else if (operation.type === 'delete') {
-        // Undo delete: restore the key with old value
-        await etcdApi.createKey(operation.key, operation.oldValue || '')
-      }
-      
-      fetchKeys(searchPrefix)
-      
-      toast({
-        title: 'Success',
-        description: `Undid ${operation.type} operation for key ${operation.key}`,
-      })
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: `Failed to undo ${operation.type} operation`,
-      })
-    }
-  }
-
-  const redo = async () => {
-    if (historyIndex >= history.length - 1) return
-    
-    const nextIndex = historyIndex + 1
-    const operation = history[nextIndex]
-    setHistoryIndex(nextIndex)
-    
-    try {
-      if (operation.type === 'create') {
-        // Redo create: recreate the key
-        await etcdApi.createKey(operation.key, operation.newValue || '')
-      } else if (operation.type === 'update') {
-        // Redo update: apply new value again
-        await etcdApi.updateKey(operation.key, operation.newValue || '')
-      } else if (operation.type === 'delete') {
-        // Redo delete: delete the key again
-        await etcdApi.deleteKey(operation.key)
-      }
-      
-      fetchKeys(searchPrefix)
-      
-      toast({
-        title: 'Success',
-        description: `Redid ${operation.type} operation for key ${operation.key}`,
-      })
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: `Failed to redo ${operation.type} operation`,
-      })
-    }
-  }
-
-  // Import/Export functions
   const handleExportKeys = async () => {
     try {
       await etcdApi.exportKeys()
@@ -443,7 +337,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <EtcdToaster />
       
       {/* Header */}
@@ -485,32 +379,22 @@ function App() {
                 </Button>
               </div>
               
-              {/* History controls - only show on keys view */}
-              {activeView === 'keys' && (
-                <div className="flex items-center gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={undo}
-                    disabled={historyIndex < 0}
-                  >
-                    Undo
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={redo}
-                    disabled={historyIndex >= history.length - 1}
-                  >
-                    Redo
-                  </Button>
-                </div>
-              )}
-              
-              <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 shadow-lg' : 'bg-red-400'}`} />
-              <span className="text-sm">
-                {isConnected ? 'Connected to etcd' : 'Disconnected'}
-              </span>
+              {/* Theme toggle and Connection status */}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleTheme}
+                  className="text-white hover:bg-white/20"
+                >
+                  {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </Button>
+                
+                <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 shadow-lg' : 'bg-red-400'}`} />
+                <span className="text-sm">
+                  {isConnected ? 'Connected to etcd' : 'Disconnected'}
+                </span>
+              </div>
             </div>
           </div>
           
@@ -518,21 +402,21 @@ function App() {
           <div className="mt-4 flex items-center gap-2 border-b border-white/20">
             <Button 
               variant="ghost" 
-              className={`${activeView === 'keys' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
+              className={`${activeView === 'keys' ? '!bg-white/20 !border-b-2 !border-white' : 'hover:!bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('keys')}
             >
               Keys
             </Button>
             <Button 
               variant="ghost" 
-              className={`${activeView === 'clusters' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
+              className={`${activeView === 'clusters' ? '!bg-white/20 !border-b-2 !border-white' : 'hover:!bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('clusters')}
             >
               Clusters
             </Button>
             <Button 
               variant="ghost" 
-              className={`${activeView === 'watch' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
+              className={`${activeView === 'watch' ? '!bg-white/20 !border-b-2 !border-white' : 'hover:!bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('watch')}
             >
               Watch

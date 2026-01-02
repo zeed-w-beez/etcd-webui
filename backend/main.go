@@ -114,7 +114,7 @@ func main() {
 		srv.Close()
 	}()
 
-	log.Printf("Starting server on %s", addr)
+	log.Printf("Starting server on http://localhost%s", addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}

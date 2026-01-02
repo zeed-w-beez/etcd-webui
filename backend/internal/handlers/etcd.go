@@ -414,21 +414,21 @@ func (h *Handler) Watch(c *gin.Context) {
 
 // ClusterStatus represents the overall etcd cluster status
 type ClusterStatus struct {
-	Members           []ClusterNode `json:"members"`
-	Leader            uint64        `json:"leader"`
-	LeaderID          string        `json:"leaderId"`
-	Revision          int64         `json:"revision"`
-	ClusterSize       int           `json:"clusterSize"`
-	EtcdVersion       string        `json:"etcdVersion"`
-	LeaderCount       int           `json:"leaderCount"`
-	FollowerCount     int           `json:"followerCount"`
-	TotalDBSize       int64         `json:"totalDbSize"`
-	TotalKeys         int64         `json:"totalKeys"`
-	RaftIndex         uint64        `json:"raftIndex"`
-	RaftTerm          uint64        `json:"raftTerm"`
-	RaftAppliedIndex  uint64        `json:"raftAppliedIndex"`
-	StorageVersion    string        `json:"storageVersion"`
-	ClusterID         string        `json:"clusterId"`
+	Members          []ClusterNode `json:"members"`
+	Leader           uint64        `json:"leader"`
+	LeaderID         string        `json:"leaderId"`
+	Revision         int64         `json:"revision"`
+	ClusterSize      int           `json:"clusterSize"`
+	EtcdVersion      string        `json:"etcdVersion"`
+	LeaderCount      int           `json:"leaderCount"`
+	FollowerCount    int           `json:"followerCount"`
+	TotalDBSize      int64         `json:"totalDbSize"`
+	TotalKeys        int64         `json:"totalKeys"`
+	RaftIndex        uint64        `json:"raftIndex"`
+	RaftTerm         uint64        `json:"raftTerm"`
+	RaftAppliedIndex uint64        `json:"raftAppliedIndex"`
+	StorageVersion   string        `json:"storageVersion"`
+	ClusterID        string        `json:"clusterId"`
 }
 
 // ClusterStatus represents the overall etcd cluster status
@@ -444,7 +444,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 	}
 
 	// Get current revision from a simple range query
-	resp, err := h.Client.Get(ctx, "", clientv3.WithLimit(1))
+	resp, err := h.Client.Get(ctx, "\x00", clientv3.WithRange("\xFF"), clientv3.WithLimit(1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -499,28 +499,29 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 		}
 	}
 
-	// Get total keys count
-	keysResp, err := h.Client.Get(ctx, "", clientv3.WithCountOnly())
+	// Get total keys count using a proper range query
+	var totalKeys int64
+	keysResp, err := h.Client.Get(ctx, "\x00", clientv3.WithFromKey(), clientv3.WithCountOnly())
 	if err == nil {
-		// keysResp.Count contains the total count
+		totalKeys = int64(keysResp.Count)
 	}
 
 	c.JSON(http.StatusOK, ClusterStatus{
-		Members:           nodes,
-		Leader:            leaderID,
-		LeaderID:          leaderNodeID,
-		Revision:          resp.Header.Revision,
-		ClusterSize:       len(nodes),
-		EtcdVersion:       etcdVersion,
-		LeaderCount:       1,
-		FollowerCount:     len(nodes) - 1,
-		TotalDBSize:       totalDBSize,
-		TotalKeys:         int64(keysResp.Count),
-		RaftIndex:         raftIndex,
-		RaftTerm:          raftTerm,
-		RaftAppliedIndex:  raftAppliedIndex,
-		StorageVersion:    fmt.Sprintf("v%d", etcdVersion),
-		ClusterID:         fmt.Sprintf("%x", memberList.Header.ClusterId),
+		Members:          nodes,
+		Leader:           leaderID,
+		LeaderID:         leaderNodeID,
+		Revision:         resp.Header.Revision,
+		ClusterSize:      len(nodes),
+		EtcdVersion:      etcdVersion,
+		LeaderCount:      1,
+		FollowerCount:    len(nodes) - 1,
+		TotalDBSize:      totalDBSize,
+		TotalKeys:        totalKeys,
+		RaftIndex:        raftIndex,
+		RaftTerm:         raftTerm,
+		RaftAppliedIndex: raftAppliedIndex,
+		StorageVersion:   fmt.Sprintf("v%d", etcdVersion),
+		ClusterID:        fmt.Sprintf("%x", memberList.Header.ClusterId),
 	})
 }
 

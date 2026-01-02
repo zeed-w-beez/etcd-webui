@@ -165,6 +165,9 @@ export const etcdApi = {
 
   async checkHealth(): Promise<HealthStatus> {
     const response = await fetch(`${API_BASE}/health`)
+    if (!response.ok) {
+      return { status: 'unhealthy', etcd: 'error', error: `HTTP ${response.status}` }
+    }
     return response.json()
   },
 

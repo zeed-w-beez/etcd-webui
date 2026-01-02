@@ -22,16 +22,27 @@ export interface ClusterNode {
   dbSize: number
   isLeader: boolean
   startTime: string
+  raftIndex: number
+  raftTerm: number
+  raftAppliedIndex: number
 }
 
 export interface ClusterStatus {
   members: ClusterNode[]
   leader: number
+  leaderId: string
   revision: number
   clusterSize: number
   etcdVersion: string
   leaderCount: number
   followerCount: number
+  totalDbSize: number
+  totalKeys: number
+  raftIndex: number
+  raftTerm: number
+  raftAppliedIndex: number
+  storageVersion: string
+  clusterId: string
 }
 
 export interface WatchEvent {

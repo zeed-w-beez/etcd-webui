@@ -518,21 +518,21 @@ function App() {
           <div className="mt-4 flex items-center gap-2 border-b border-white/20">
             <Button 
               variant="ghost" 
-              className={`text-white ${activeView === 'keys' ? 'border-b-2 border-white' : 'opacity-70 hover:opacity-100'}`}
+              className={`${activeView === 'keys' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('keys')}
             >
               Keys
             </Button>
             <Button 
               variant="ghost" 
-              className={`text-white ${activeView === 'clusters' ? 'border-b-2 border-white' : 'opacity-70 hover:opacity-100'}`}
+              className={`${activeView === 'clusters' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('clusters')}
             >
               Clusters
             </Button>
             <Button 
               variant="ghost" 
-              className={`text-white ${activeView === 'watch' ? 'border-b-2 border-white' : 'opacity-70 hover:opacity-100'}`}
+              className={`${activeView === 'watch' ? 'bg-white/20 border-b-2 border-white' : 'hover:bg-white/10'} text-white rounded-t-lg`}
               onClick={() => setActiveView('watch')}
             >
               Watch

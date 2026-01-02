@@ -56,17 +56,29 @@ export interface WatchEvent {
 }
 
 export const etcdApi = {
-  async getKeys(prefix?: string): Promise<EtcdKey[]> {
-    const url = prefix 
-      ? `${API_BASE}/keys?prefix=${encodeURIComponent(prefix)}`
-      : `${API_BASE}/keys`
+  async getKeys(prefix?: string, limit?: number): Promise<EtcdKey[]> {
+    let url = `${API_BASE}/keys`
+    const params = new URLSearchParams()
+    
+    if (prefix) {
+      params.set('prefix', prefix)
+    }
+    if (limit && limit > 0) {
+      params.set('limit', limit.toString())
+    }
+    
+    const queryString = params.toString()
+    if (queryString) {
+      url += `?${queryString}`
+    }
     
     const response = await fetch(url)
     if (!response.ok) {
       throw new Error('Failed to fetch keys')
     }
     
-    return response.json()
+    const data = await response.json()
+    return data.keys || []
   },
 
   async getKey(key: string): Promise<EtcdKey> {

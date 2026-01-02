@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon } from 'lucide-react'
+import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw } from 'lucide-react'
 import { etcdApi, type EtcdKey } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
@@ -24,7 +24,7 @@ function App() {
   const [keys, setKeys] = useState<EtcdKey[]>([])
   const [tree, setTree] = useState<TreeItem[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
-  const [searchPrefix, setSearchPrefix] = useState('')
+  const [searchPrefix, setSearchPrefix] = useState('/')
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
@@ -46,10 +46,6 @@ function App() {
   const [editValue, setEditValue] = useState('')
   const [editValueFormat, setEditValueFormat] = useState<'text' | 'json' | 'yaml'>('text')
   const [deleteKeyName, setDeleteKeyName] = useState('')
-  
-  // Import dialog state
-  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false)
-  const [importFile, setImportFile] = useState<File | null>(null)
   
   // View state
   type View = 'keys' | 'clusters' | 'watch'
@@ -78,10 +74,10 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
-  const fetchKeys = async (prefix?: string) => {
+  const fetchKeys = async (prefix?: string, limit: number = 100) => {
     setIsLoading(true)
     try {
-      const data = await etcdApi.getKeys(prefix)
+      const data = await etcdApi.getKeys(prefix, limit)
       const sortedKeys = data.sort((a, b) => a.key.localeCompare(b.key))
       setKeys(sortedKeys)
       setTree(keysToTree(sortedKeys))
@@ -124,8 +120,8 @@ function App() {
             }
           }}
           className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all ${selectedKey === node.key
-            ? 'bg-violet-100 border-violet-300 border'
-            : 'bg-gray-50 hover:bg-gray-100 border border-transparent'}
+            ? 'bg-violet-100 dark:bg-violet-900 border-violet-300 dark:border-violet-700 border'
+            : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent'}
           `}
           style={{ paddingLeft: `${level * 16}px` }}
         >
@@ -136,11 +132,11 @@ function App() {
           ) : (
             <ChevronRight className="h-4 w-4 text-gray-500" />
           )}
-          <span className={`font-medium ${node.isLeaf ? 'text-gray-800' : 'text-violet-700'}`}>
+          <span className={`font-medium ${node.isLeaf ? 'text-gray-800 dark:text-gray-200' : 'text-violet-700 dark:text-violet-300'}`}>
             {node.name}
           </span>
           {node.isLeaf && (
-            <span className="text-xs text-gray-500 truncate ml-2">
+            <span className="text-xs text-gray-500 dark:text-gray-400 truncate ml-2">
               {node.value && node.value.length > 20 ? `${node.value.slice(0, 20)}...` : node.value || ''}
             </span>
           )}
@@ -282,60 +278,6 @@ function App() {
     }
   }
 
-  // Import/Export functions
-  const handleExportKeys = async () => {
-    try {
-      await etcdApi.exportKeys()
-      toast({
-        title: 'Success',
-        description: 'Keys exported successfully',
-      })
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to export keys',
-      })
-    }
-  }
-
-  const handleImportKeys = async () => {
-    if (!importFile) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Please select a file to import',
-      })
-      return
-    }
-
-    try {
-      const content = await importFile.text()
-      const keys = JSON.parse(content)
-      
-      await etcdApi.importKeys(keys)
-      toast({
-        title: 'Success',
-        description: `Imported ${keys.length} keys successfully`,
-      })
-      
-      setIsImportDialogOpen(false)
-      setImportFile(null)
-      fetchKeys(searchPrefix)
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to import keys',
-      })
-    }
-  }
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] || null
-    setImportFile(file)
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <EtcdToaster />
@@ -439,11 +381,9 @@ function App() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <CardTitle className="text-lg">Keys</CardTitle>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={handleExportKeys}>
-                      Export
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setIsImportDialogOpen(true)}>
-                      Import
+                    <Button size="sm" variant="outline" onClick={() => fetchKeys(searchPrefix)}>
+                      <RotateCcw className="h-4 w-4 mr-1" />
+                      Refresh
                     </Button>
                     <Button size="sm" onClick={() => setIsAddDialogOpen(true)}>
                       <Plus className="h-4 w-4 mr-1" />
@@ -486,15 +426,15 @@ function App() {
                   {selectedKey && selectedKeyData ? (
                     <div>
                       <div className="mb-4">
-                        <label className="text-sm font-medium text-gray-700">Key</label>
-                        <p className="text-sm bg-gray-100 p-2 rounded mt-1 break-all">{selectedKey}</p>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Key</label>
+                        <p className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded mt-1 break-all">{selectedKey}</p>
                       </div>
                       <div className="mb-4">
-                        <label className="text-sm font-medium text-gray-700">Value</label>
+                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Value</label>
                         <Textarea
                           value={selectedKeyData.value}
                           readOnly
-                          className="mt-1 font-mono text-sm bg-gray-50"
+                          className="mt-1 font-mono text-sm bg-gray-50 dark:bg-gray-800"
                         />
                       </div>
                       <div className="flex gap-2">
@@ -651,7 +591,7 @@ function App() {
           <p className="text-gray-600 py-4">
             Are you sure you want to delete this key? This action cannot be undone.
           </p>
-          <p className="font-medium bg-gray-100 p-2 rounded break-all">{deleteKeyName}</p>
+          <p className="font-medium bg-gray-100 dark:bg-gray-800 p-2 rounded break-all">{deleteKeyName}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
               Cancel
@@ -663,67 +603,6 @@ function App() {
         </DialogContent>
       </Dialog>
 
-      {/* Import Keys Dialog */}
-      <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Import Keys</DialogTitle>
-          </DialogHeader>
-          <div className="py-4">
-            <p className="text-sm text-gray-600 mb-4">
-              Select a JSON file containing etcd keys to import. The file should be in the format exported by this application.
-            </p>
-            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-              {importFile ? (
-                <div className="flex items-center justify-center gap-2">
-                  <div className="bg-green-100 text-green-700 p-2 rounded">
-                    <span className="font-medium">{importFile.name}</span>
-                  </div>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={() => setImportFile(null)}
-                  >
-                    Change File
-                  </Button>
-                </div>
-              ) : (
-                <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
-                  <div className="space-y-2">
-                    <div className="flex justify-center">
-                      <div className="rounded-full bg-blue-100 p-3">
-                        <Database className="h-10 w-10 text-blue-600" />
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-medium">Drag and drop your JSON file here</p>
-                      <p className="text-sm text-gray-500">or</p>
-                      <Button variant="outline">Select File</Button>
-                    </div>
-                  </div>
-                </label>
-              )}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setIsImportDialogOpen(false)
-              setImportFile(null)
-            }}>
-              Cancel
-            </Button>
-            <Button onClick={handleImportKeys} disabled={!importFile}>
-              Import
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

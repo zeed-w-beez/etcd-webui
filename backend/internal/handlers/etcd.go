@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,13 +108,15 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	defer cancel()
 
 	prefix := c.Query("prefix")
+	limit := c.DefaultQuery("limit", "100")
+	limitNum, _ := strconv.ParseInt(limit, 10, 64)
 
 	opts := []clientv3.OpOption{}
 	if prefix != "" {
 		opts = append(opts, clientv3.WithPrefix())
 	}
 
-	resp, err := h.Client.Get(ctx, prefix, opts...)
+	resp, err := h.Client.Get(ctx, prefix, append(opts, clientv3.WithLimit(limitNum))...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -128,7 +131,10 @@ func (h *Handler) GetKeys(c *gin.Context) {
 		keys = append(keys, key)
 	}
 
-	c.JSON(http.StatusOK, KeysResponse{Keys: keys})
+	c.JSON(http.StatusOK, gin.H{
+		"keys":  keys,
+		"count": resp.Count,
+	})
 }
 
 func (h *Handler) GetKey(c *gin.Context) {

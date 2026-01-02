@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -12,6 +12,9 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw } from 'lucide-react'
+import CodeMirror from '@uiw/react-codemirror'
+import { json } from '@codemirror/lang-json'
+import { yaml } from '@codemirror/lang-yaml'
 import { etcdApi, type EtcdKey } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
@@ -254,16 +257,32 @@ function App() {
 
   // Formatting functions
   const formatValue = (value: string, format: 'text' | 'json' | 'yaml'): string => {
+    if (!value.trim()) return value
     try {
-      if (format === 'json') {
-        const parsed = JSON.parse(value)
-        return JSON.stringify(parsed, null, 2)
+      switch (format) {
+        case 'json':
+          return JSON.stringify(JSON.parse(value), null, 2)
+        case 'yaml':
+          const parsed = JSON.parse(value)
+          return Object.entries(parsed).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n')
+        default:
+          return value
       }
-    } catch (error) {
-      // If parsing fails, return original value
+    } catch {
+      return value
     }
-    return value
   }
+
+  const getCodeMirrorExtensions = useCallback((format: 'text' | 'json' | 'yaml') => {
+    switch (format) {
+      case 'json':
+        return [json()]
+      case 'yaml':
+        return [yaml()]
+      default:
+        return []
+    }
+  }, [])
 
   const validateValue = (value: string, format: 'text' | 'json' | 'yaml'): boolean => {
     if (format === 'text') return true
@@ -562,11 +581,14 @@ function App() {
                 </Button>
               </div>
             </div>
-            <Textarea
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              className={`mt-1 font-mono ${!validateValue(editValue, editValueFormat) ? 'border-red-500' : ''}`}
-            />
+            <CodeMirror
+                value={editValue}
+                height="200px"
+                width="100%"
+                extensions={getCodeMirrorExtensions(editValueFormat)}
+                onChange={(val) => setEditValue(val)}
+                className={`mt-1 border rounded-md overflow-hidden ${!validateValue(editValue, editValueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}
+              />
             {!validateValue(editValue, editValueFormat) && (
               <p className="text-xs text-red-500 mt-1">Invalid {editValueFormat} format</p>
             )}

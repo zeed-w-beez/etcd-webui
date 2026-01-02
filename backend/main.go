@@ -15,7 +15,7 @@ import (
 	"github.com/etcd-webui/backend/internal/handlers"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"go.etcd.io/etcd/client/v3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func main() {
@@ -47,8 +47,8 @@ func main() {
 	}
 
 	h := &handlers.Handler{
-		client: cli,
-		prefix: "",
+		Client: cli,
+		Prefix: "",
 	}
 
 	gin.SetMode(gin.ReleaseMode)
@@ -71,6 +71,10 @@ func main() {
 		api.PUT("/keys/:key", h.UpdateKey)
 		api.DELETE("/keys/:key", h.DeleteKey)
 		api.DELETE("/keys", h.DeleteKeys)
+		api.GET("/keys/export", h.ExportKeys)
+		api.POST("/keys/import", h.ImportKeys)
+		api.GET("/cluster/status", h.ClusterStatus)
+		api.GET("/watch", h.Watch)
 	}
 
 	staticDir := cfg.StaticDir

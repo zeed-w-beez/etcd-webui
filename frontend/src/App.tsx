@@ -300,6 +300,11 @@ function App() {
     } catch (error) {
       console.error('Failed to fetch key versions:', error)
       setKeyVersions(null)
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: `Failed to load versions for key "${key}": ${(error as Error).message}`,
+      })
     } finally {
       setIsLoadingVersions(false)
     }
@@ -605,7 +610,7 @@ function App() {
                         <div className={`mt-1 border rounded-md ${!validateValue(editedValue, valueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}>
                           <CodeMirror
                             value={editedValue}
-                            height="200px"
+                            minHeight="200px"
                             extensions={getCodeMirrorExtensions(valueFormat)}
                             theme={isDarkMode ? 'dark' : 'light'}
                             onChange={(value) => setEditedValue(value)}

@@ -67,6 +67,8 @@ func main() {
 		api.GET("/health", h.HealthCheck)
 		api.GET("/keys", h.GetKeys)
 		api.GET("/keys/:key", h.GetKey)
+		api.GET("/keys/:key/versions", h.GetKeyVersions)
+		api.GET("/keys/:key/history", h.GetKeyHistory)
 		api.POST("/keys", h.CreateKey)
 		api.PUT("/keys/:key", h.UpdateKey)
 		api.DELETE("/keys/:key", h.DeleteKey)

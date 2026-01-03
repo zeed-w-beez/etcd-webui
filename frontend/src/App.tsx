@@ -11,11 +11,11 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw } from 'lucide-react'
+import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
-import { etcdApi, type EtcdKey } from '@/services/etcd'
+import { etcdApi, type EtcdKey, type KeyVersionsResponse, type KeyHistoryResponse } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
 import { type TreeItem, keysToTree } from '@/lib/utils'
@@ -58,11 +58,22 @@ function App() {
   const [editedValue, setEditedValue] = useState('')
   const [valueFormat, setValueFormat] = useState<'text' | 'json' | 'yaml'>('text')
   
+  // Version history state
+  const [keyVersions, setKeyVersions] = useState<KeyVersionsResponse | null>(null)
+  const [isCompareDialogOpen, setIsCompareDialogOpen] = useState(false)
+  const [leftVersion, setLeftVersion] = useState<number | null>(null)
+  const [rightVersion, setRightVersion] = useState<number | null>(null)
+  const [leftHistory, setLeftHistory] = useState<KeyHistoryResponse | null>(null)
+  const [rightHistory, setRightHistory] = useState<KeyHistoryResponse | null>(null)
+  const [compareFormat, setCompareFormat] = useState<'text' | 'json' | 'yaml'>('text')
+  const [isLoadingVersions, setIsLoadingVersions] = useState(false)
+  
   // Update editedValue when selectedKey changes
   useEffect(() => {
     if (selectedKeyData) {
       setEditedValue(selectedKeyData.value)
     }
+    fetchKeyVersions(selectedKey)
   }, [selectedKey])
   
   const { toast } = useToast()
@@ -276,6 +287,70 @@ function App() {
     }
   }
 
+  const fetchKeyVersions = async (key: string | null) => {
+    if (!key) {
+      setKeyVersions(null)
+      return
+    }
+    
+    setIsLoadingVersions(true)
+    try {
+      const versions = await etcdApi.getKeyVersions(key)
+      setKeyVersions(versions)
+    } catch (error) {
+      console.error('Failed to fetch key versions:', error)
+      setKeyVersions(null)
+    } finally {
+      setIsLoadingVersions(false)
+    }
+  }
+
+  const openCompareDialog = () => {
+    if (!keyVersions || keyVersions.versions.length === 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'No version history available for comparison',
+      })
+      return
+    }
+    
+    setLeftVersion(1)
+    setRightVersion(keyVersions.currentVersion)
+    setLeftHistory(null)
+    setRightHistory(null)
+    fetchVersionHistory(1, 'left')
+    fetchVersionHistory(keyVersions.currentVersion, 'right')
+    setIsCompareDialogOpen(true)
+  }
+
+  const fetchVersionHistory = async (version: number, side: 'left' | 'right') => {
+    if (!selectedKey || !keyVersions) return
+    
+    const versionInfo = keyVersions.versions.find(v => v.version === version)
+    if (!versionInfo) return
+    
+    try {
+      const history = await etcdApi.getKeyHistory(selectedKey, versionInfo.revision)
+      if (side === 'left') {
+        setLeftHistory(history)
+      } else {
+        setRightHistory(history)
+      }
+    } catch (error) {
+      console.error('Failed to fetch version history:', error)
+    }
+  }
+
+  const handleVersionChange = (version: number, side: 'left' | 'right') => {
+    if (side === 'left') {
+      setLeftVersion(version)
+    } else {
+      setRightVersion(version)
+    }
+    fetchVersionHistory(version, side)
+  }
+
   const selectedKeyData = keys.find(k => k.key === selectedKey)
 
   // Formatting functions
@@ -462,19 +537,37 @@ function App() {
               {/* Detail Panel */}
               <Card className="lg:col-span-2">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">Key Details</CardTitle>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-lg">Key Details</CardTitle>
+                      {selectedKey && keyVersions && (
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
+                          (v{keyVersions.currentVersion})
+                        </span>
+                      )}
+                    </div>
                     {selectedKey && selectedKeyData && (
-                      <Select value={valueFormat} onValueChange={(value) => setValueFormat(value as 'text' | 'json' | 'yaml')}>
-                        <SelectTrigger className="w-32">
-                          <SelectValue placeholder="Format" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="text">Text</SelectItem>
-                          <SelectItem value="json">JSON</SelectItem>
-                          <SelectItem value="yaml">YAML</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-2">
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={openCompareDialog}
+                          disabled={isLoadingVersions || !keyVersions || keyVersions.versions.length < 2}
+                        >
+                          <GitCompare className="h-4 w-4 mr-1" />
+                          Compare
+                        </Button>
+                        <Select value={valueFormat} onValueChange={(value) => setValueFormat(value as 'text' | 'json' | 'yaml')}>
+                          <SelectTrigger className="w-32">
+                            <SelectValue placeholder="Format" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="text">Text</SelectItem>
+                            <SelectItem value="json">JSON</SelectItem>
+                            <SelectItem value="yaml">YAML</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     )}
                   </div>
                 </CardHeader>
@@ -485,6 +578,28 @@ function App() {
                         <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Key</label>
                         <p className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded mt-1 break-all">{selectedKey}</p>
                       </div>
+                      {selectedKeyData && (
+                        <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                              <span className="text-gray-500 dark:text-gray-400">版本:</span>
+                              <span className="ml-2 font-medium">{selectedKeyData.version || '-'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 dark:text-gray-400">创建版本:</span>
+                              <span className="ml-2 font-medium">{selectedKeyData.createRevision || '-'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 dark:text-gray-400">修订版本:</span>
+                              <span className="ml-2 font-medium">{selectedKeyData.modRevision || '-'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500 dark:text-gray-400">大小:</span>
+                              <span className="ml-2 font-medium">{selectedKeyData.value ? new Blob([selectedKeyData.value]).size + 'B' : '-'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <div className="mb-4">
                         <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Value</label>
                         <div className={`mt-1 border rounded-md ${!validateValue(editedValue, valueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}>
@@ -676,6 +791,125 @@ function App() {
             </Button>
             <Button variant="destructive" onClick={handleDeleteKey}>
               Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Version Compare Dialog */}
+      <Dialog open={isCompareDialogOpen} onOpenChange={setIsCompareDialogOpen}>
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Version Comparison</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 overflow-hidden flex-1 flex flex-col">
+            {keyVersions && (
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Left Version:</label>
+                  <Select 
+                    value={leftVersion?.toString() || ''} 
+                    onValueChange={(value) => handleVersionChange(parseInt(value), 'left')}
+                  >
+                    <SelectTrigger className="w-40">
+                      <SelectValue placeholder="Select version" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {keyVersions.versions.map((v) => (
+                        <SelectItem key={v.version} value={v.version.toString()}>
+                          v{v.version} (r{v.revision})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Format:</label>
+                  <Select value={compareFormat} onValueChange={(value) => setCompareFormat(value as 'text' | 'json' | 'yaml')}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue placeholder="Format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">Text</SelectItem>
+                      <SelectItem value="json">JSON</SelectItem>
+                      <SelectItem value="yaml">YAML</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Right Version:</label>
+                  <Select 
+                    value={rightVersion?.toString() || ''} 
+                    onValueChange={(value) => handleVersionChange(parseInt(value), 'right')}
+                  >
+                    <SelectTrigger className="w-40">
+                      <SelectValue placeholder="Select version" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {keyVersions.versions.map((v) => (
+                        <SelectItem key={v.version} value={v.version.toString()}>
+                          v{v.version} (r{v.revision})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            
+            <div className="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
+              <div className="flex flex-col overflow-hidden">
+                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
+                  <span className="text-sm font-medium">
+                    {leftHistory ? `Version ${leftHistory.version}` : 'Loading...'}
+                  </span>
+                </div>
+                <div className="flex-1 border rounded-b-md overflow-hidden">
+                  {leftHistory ? (
+                    <CodeMirror
+                      value={leftHistory.value}
+                      height="300px"
+                      extensions={getCodeMirrorExtensions(compareFormat)}
+                      theme={isDarkMode ? 'dark' : 'light'}
+                      readOnly
+                      className="text-sm h-full"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-[300px] text-gray-400">
+                      Select a version to view
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="flex flex-col overflow-hidden">
+                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
+                  <span className="text-sm font-medium">
+                    {rightHistory ? `Version ${rightHistory.version}` : 'Loading...'}
+                  </span>
+                </div>
+                <div className="flex-1 border rounded-b-md overflow-hidden">
+                  {rightHistory ? (
+                    <CodeMirror
+                      value={rightHistory.value}
+                      height="300px"
+                      extensions={getCodeMirrorExtensions(compareFormat)}
+                      theme={isDarkMode ? 'dark' : 'light'}
+                      readOnly
+                      className="text-sm h-full"
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-[300px] text-gray-400">
+                      Select a version to view
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCompareDialogOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

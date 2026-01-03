@@ -22,8 +22,11 @@ type Handler struct {
 }
 
 type EtcdKey struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Key            string `json:"key"`
+	Value          string `json:"value"`
+	Version        int64  `json:"version,omitempty"`
+	ModRevision    int64  `json:"modRevision,omitempty"`
+	CreateRevision int64  `json:"createRevision,omitempty"`
 }
 
 type HealthStatus struct {
@@ -37,8 +40,18 @@ type KeysResponse struct {
 }
 
 type KeyResponse struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Key          string `json:"key"`
+	Value        string `json:"value"`
+	Version      int64  `json:"version"`
+	ModRevision  int64  `json:"modRevision"`
+	CreateRevision int64 `json:"createRevision"`
+}
+
+type KeyHistoryResponse struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	Revision  int64  `json:"revision"`
+	Version   int64  `json:"version"`
 }
 
 type CreateKeyRequest struct {
@@ -128,8 +141,11 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	keys := make([]EtcdKey, 0, resp.Count)
 	for _, kv := range resp.Kvs {
 		key := EtcdKey{
-			Key:   string(kv.Key),
-			Value: string(kv.Value),
+			Key:            string(kv.Key),
+			Value:          string(kv.Value),
+			Version:        kv.Version,
+			ModRevision:    kv.ModRevision,
+			CreateRevision: kv.CreateRevision,
 		}
 		keys = append(keys, key)
 	}
@@ -163,8 +179,93 @@ func (h *Handler) GetKey(c *gin.Context) {
 
 	kv := resp.Kvs[0]
 	c.JSON(http.StatusOK, KeyResponse{
-		Key:   string(kv.Key),
-		Value: string(kv.Value),
+		Key:          string(kv.Key),
+		Value:        string(kv.Value),
+		Version:      kv.Version,
+		ModRevision:  kv.ModRevision,
+		CreateRevision: kv.CreateRevision,
+	})
+}
+
+func (h *Handler) GetKeyHistory(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	key := c.Param("key")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	revisionStr := c.Query("revision")
+	var revision int64
+	var err error
+	if revisionStr != "" {
+		revision, err = strconv.ParseInt(revisionStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid revision"})
+			return
+		}
+	}
+
+	resp, err := h.Client.Get(ctx, key, clientv3.WithRev(revision))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if resp.Count == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "key not found at specified revision"})
+		return
+	}
+
+	kv := resp.Kvs[0]
+	c.JSON(http.StatusOK, KeyHistoryResponse{
+		Key:      string(kv.Key),
+		Value:    string(kv.Value),
+		Revision: kv.ModRevision,
+		Version:  kv.Version,
+	})
+}
+
+func (h *Handler) GetKeyVersions(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	key := c.Param("key")
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
+		return
+	}
+
+	resp, err := h.Client.Get(ctx, key)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if resp.Count == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "key not found"})
+		return
+	}
+
+	kv := resp.Kvs[0]
+	createRevision := kv.CreateRevision
+	currentVersion := kv.Version
+
+	versions := make([]map[string]int64, 0)
+	for v := int64(1); v <= currentVersion; v++ {
+		versions = append(versions, map[string]int64{
+			"version": v,
+			"revision": createRevision + v - 1,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"key":            key,
+		"currentVersion": currentVersion,
+		"createRevision": createRevision,
+		"versions":       versions,
 	})
 }
 

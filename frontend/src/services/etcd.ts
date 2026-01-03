@@ -5,6 +5,28 @@ const API_BASE = '/api'
 export interface EtcdKey {
   key: string
   value: string
+  version?: number
+  modRevision?: number
+  createRevision?: number
+}
+
+export interface KeyVersion {
+  version: number
+  revision: number
+}
+
+export interface KeyVersionsResponse {
+  key: string
+  currentVersion: number
+  createRevision: number
+  versions: KeyVersion[]
+}
+
+export interface KeyHistoryResponse {
+  key: string
+  value: string
+  revision: number
+  version: number
 }
 
 export interface HealthStatus {
@@ -89,6 +111,37 @@ export const etcdApi = {
         throw new Error('Key not found')
       }
       throw new Error('Failed to fetch key')
+    }
+    
+    return response.json()
+  },
+
+  async getKeyVersions(key: string): Promise<KeyVersionsResponse> {
+    const response = await fetch(`${API_BASE}/keys/${encodeURIComponent(key)}/versions`)
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Key not found')
+      }
+      throw new Error('Failed to fetch key versions')
+    }
+    
+    return response.json()
+  },
+
+  async getKeyHistory(key: string, revision?: number): Promise<KeyHistoryResponse> {
+    let url = `${API_BASE}/keys/${encodeURIComponent(key)}/history`
+    if (revision !== undefined) {
+      url += `?revision=${revision}`
+    }
+    
+    const response = await fetch(url)
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Key history not found at specified revision')
+      }
+      throw new Error('Failed to fetch key history')
     }
     
     return response.json()

@@ -3,17 +3,17 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/etcd-webui/backend/config"
+	"github.com/etcd-webui/backend/internal/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type Handler struct {
@@ -272,22 +272,22 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 	if revision > 0 {
 		resp, err = h.Client.Get(ctx, key, clientv3.WithRev(revision), clientv3.WithLimit(1))
 		if err != nil {
-			log.Printf("Error fetching key %s at revision %d: %v", key, revision, err)
+			logger.Error("Error fetching key %s at revision %d: %v", key, revision, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		log.Printf("Fetched key %s at revision %d: count=%d", key, revision, resp.Count)
+		logger.Debug("Fetched key %s at revision %d: count=%d", key, revision, resp.Count)
 		if resp.Count == 0 {
-			log.Printf("No data found for key %s at revision %d", key, revision)
+			logger.Debug("No data found for key %s at revision %d", key, revision)
 			c.JSON(http.StatusNotFound, gin.H{"error": "key not found at specified revision"})
 			return
 		}
 		kv = resp.Kvs[0]
-		log.Printf("Found value at revision %d: %s (ModRevision=%d)", kv.ModRevision, kv.Value, kv.ModRevision)
+		logger.Debug("Found value at revision %d: %s (ModRevision=%d)", kv.ModRevision, kv.Value, kv.ModRevision)
 	} else {
 		kv = resp.Kvs[0]
 	}
-	log.Printf("Returning value for key %s: %s (revision %d, version %d)", key, kv.Value, kv.ModRevision, kv.Version)
+	logger.Debug("Returning value for key %s: %s (revision %d, version %d)", key, kv.Value, kv.ModRevision, kv.Version)
 	c.JSON(http.StatusOK, KeyHistoryResponse{
 		Key:      string(kv.Key),
 		Value:    string(kv.Value),
@@ -633,7 +633,7 @@ func (h *Handler) Watch(c *gin.Context) {
 
 			// Send event to client
 			if err := conn.WriteJSON(watchEvent); err != nil {
-				log.Printf("Failed to write watch event to WebSocket: %v", err)
+				logger.Debug("Failed to write watch event to WebSocket: %v", err)
 				return
 			}
 		}
@@ -642,21 +642,29 @@ func (h *Handler) Watch(c *gin.Context) {
 
 // ClusterStatus represents the overall etcd cluster status
 type ClusterStatus struct {
-	Members          []ClusterNode `json:"members"`
-	Leader           uint64        `json:"leader"`
-	LeaderID         string        `json:"leaderId"`
-	Revision         int64         `json:"revision"`
-	ClusterSize      int           `json:"clusterSize"`
-	EtcdVersion      string        `json:"etcdVersion"`
-	LeaderCount      int           `json:"leaderCount"`
-	FollowerCount    int           `json:"followerCount"`
-	TotalDBSize      int64         `json:"totalDbSize"`
-	TotalKeys        int64         `json:"totalKeys"`
-	RaftIndex        uint64        `json:"raftIndex"`
-	RaftTerm         uint64        `json:"raftTerm"`
-	RaftAppliedIndex uint64        `json:"raftAppliedIndex"`
-	StorageVersion   string        `json:"storageVersion"`
-	ClusterID        string        `json:"clusterId"`
+	Members          []ClusterNode   `json:"members"`
+	Leader           uint64          `json:"leader"`
+	LeaderID         string          `json:"leaderId"`
+	Revision         int64           `json:"revision"`
+	ClusterSize      int             `json:"clusterSize"`
+	EtcdVersion      string          `json:"etcdVersion"`
+	LeaderCount      int             `json:"leaderCount"`
+	FollowerCount    int             `json:"followerCount"`
+	TotalDBSize      int64           `json:"totalDbSize"`
+	TotalKeys        int64           `json:"totalKeys"`
+	RaftIndex        uint64          `json:"raftIndex"`
+	RaftTerm         uint64          `json:"raftTerm"`
+	RaftAppliedIndex uint64          `json:"raftAppliedIndex"`
+	StorageVersion   string          `json:"storageVersion"`
+	ClusterID        string          `json:"clusterId"`
+	Features         ClusterFeatures `json:"features"`
+}
+
+type ClusterFeatures struct {
+	CompactSupported   bool   `json:"compactSupported"`
+	DefragSupported    bool   `json:"defragSupported"`
+	MaxCompactRevision int64  `json:"maxCompactRevision"`
+	MinDefragVersion   string `json:"minDefragVersion"`
 }
 
 // ClusterStatus represents the overall etcd cluster status
@@ -750,11 +758,175 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 		RaftAppliedIndex: raftAppliedIndex,
 		StorageVersion:   "v" + etcdVersion,
 		ClusterID:        fmt.Sprintf("%x", memberList.Header.ClusterId),
+		Features:         h.getClusterFeatures(etcdVersion),
 	})
+}
+
+func (h *Handler) getClusterFeatures(version string) ClusterFeatures {
+	major, minor, _, err := parseVersion(version)
+	if err != nil {
+		return ClusterFeatures{
+			CompactSupported:   false,
+			DefragSupported:    false,
+			MaxCompactRevision: 0,
+			MinDefragVersion:   "unknown",
+		}
+	}
+
+	compactSupported := true
+	defragSupported := major >= 3 && minor >= 3
+
+	minDefragVersion := "3.3.0"
+	if major < 3 || (major == 3 && minor < 3) {
+		minDefragVersion = "not supported"
+	}
+
+	return ClusterFeatures{
+		CompactSupported:   compactSupported,
+		DefragSupported:    defragSupported,
+		MaxCompactRevision: -1,
+		MinDefragVersion:   minDefragVersion,
+	}
 }
 
 func (h *Handler) Close() {
 	if h.Client != nil {
 		h.Client.Close()
 	}
+}
+
+type CompactRequest struct {
+	Revision int64 `json:"revision"`
+}
+
+type CompactResponse struct {
+	Revision  int64  `json:"revision"`
+	Compacted bool   `json:"compacted"`
+	Message   string `json:"message"`
+}
+
+type DefragResponse struct {
+	MemberEndpoint string `json:"memberEndpoint"`
+	DBSize         int64  `json:"dbSize"`
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+}
+
+type DefragStatusResponse struct {
+	Version       string  `json:"version"`
+	DBSize        int64   `json:"dbSize"`
+	DBUsedSize    int64   `json:"dbUsedSize"`
+	DefragNeeded  bool    `json:"defragNeeded"`
+	DefragPercent float64 `json:"defragPercent"`
+}
+
+func parseVersion(version string) (major, minor, patch int, err error) {
+	version = strings.TrimPrefix(version, "v")
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return 0, 0, 0, fmt.Errorf("invalid version format: %s", version)
+	}
+
+	major, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	minor, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	if len(parts) > 2 {
+		patch, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return 0, 0, 0, err
+		}
+	}
+
+	return major, minor, patch, nil
+}
+
+func (h *Handler) Compact(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	var req CompactRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Revision <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "revision must be greater than 0"})
+		return
+	}
+
+	resp, err := h.Client.Compact(ctx, req.Revision)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	_ = resp
+
+	c.JSON(http.StatusOK, CompactResponse{
+		Revision:  req.Revision,
+		Compacted: true,
+		Message:   fmt.Sprintf("Successfully compacted etcd to revision %d", req.Revision),
+	})
+}
+
+func (h *Handler) Defrag(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+
+	memberList, err := h.Client.MemberList(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	var results []DefragResponse
+
+	for _, member := range memberList.Members {
+		for _, endpoint := range member.ClientURLs {
+			status, err := h.Client.Status(ctx, endpoint)
+			if err != nil {
+				continue
+			}
+
+			_, err = h.Client.Defragment(ctx, endpoint)
+			if err != nil {
+				results = append(results, DefragResponse{
+					MemberEndpoint: endpoint,
+					DBSize:         status.DbSize,
+					Success:        false,
+					Message:        fmt.Sprintf("Failed to defragment: %v", err),
+				})
+			} else {
+				results = append(results, DefragResponse{
+					MemberEndpoint: endpoint,
+					DBSize:         status.DbSize,
+					Success:        true,
+					Message:        fmt.Sprintf("Successfully defragmented %s", endpoint),
+				})
+			}
+			break
+		}
+	}
+
+	successCount := 0
+	for _, r := range results {
+		if r.Success {
+			successCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"results":      results,
+		"totalMembers": len(results),
+		"successCount": successCount,
+		"failedCount":  len(results) - successCount,
+	})
 }

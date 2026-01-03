@@ -11,17 +11,18 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare } from 'lucide-react'
+import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare, RefreshCw, Wrench } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
-import { etcdApi, type EtcdKey, type KeyVersionsResponse, type KeyHistoryResponse } from '@/services/etcd'
+import { etcdApi, type EtcdKey, type KeyVersionsResponse, type KeyHistoryResponse, type ClusterFeatures } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
 import { type TreeItem, keysToTree } from '@/lib/utils'
 import { ClusterManager } from './components/ClusterManager'
 import { ClusterStatusCard } from './components/ClusterStatusCard'
 import { WatchPanel } from './components/WatchPanel'
+import { WordDiff } from '@/components/WordDiff'
 
 function App() {
   const [keys, setKeys] = useState<EtcdKey[]>([])
@@ -62,12 +63,20 @@ function App() {
   // Version history state
   const [keyVersions, setKeyVersions] = useState<KeyVersionsResponse | null>(null)
   const [isCompareDialogOpen, setIsCompareDialogOpen] = useState(false)
+  const [isMaintenanceDialogOpen, setIsMaintenanceDialogOpen] = useState(false)
   const [leftVersion, setLeftVersion] = useState<number | null>(null)
   const [rightVersion, setRightVersion] = useState<number | null>(null)
   const [leftHistory, setLeftHistory] = useState<KeyHistoryResponse | null>(null)
   const [rightHistory, setRightHistory] = useState<KeyHistoryResponse | null>(null)
-  const [compareFormat, setCompareFormat] = useState<'text' | 'json' | 'yaml'>('text')
+  const [compareFormat] = useState<'text' | 'json' | 'yaml'>('text')
+  const [compareMode, setCompareMode] = useState<'split' | 'unified' | 'diff'>('split')
   const [isLoadingVersions, setIsLoadingVersions] = useState(false)
+  
+  // Maintenance states
+  const [clusterFeatures, setClusterFeatures] = useState<ClusterFeatures | null>(null)
+  const [compactRevision, setCompactRevision] = useState('')
+  const [isPerformingCompact, setIsPerformingCompact] = useState(false)
+  const [isPerformingDefrag, setIsPerformingDefrag] = useState(false)
 
   
   // Update editedValue when selectedKey changes
@@ -382,6 +391,59 @@ function App() {
     fetchVersionHistory(version, side)
   }
 
+  const handleCompact = async () => {
+    const revision = parseInt(compactRevision, 10)
+    if (isNaN(revision) || revision <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Please enter a valid revision number',
+      })
+      return
+    }
+
+    setIsPerformingCompact(true)
+    try {
+      await etcdApi.compact(revision)
+      
+      toast({
+        title: 'Success',
+        description: `Successfully compacted etcd to revision ${revision}`,
+      })
+      setCompactRevision('')
+      fetchKeys(searchPrefix)
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: (error as Error).message,
+      })
+    } finally {
+      setIsPerformingCompact(false)
+    }
+  }
+
+  const handleDefrag = async () => {
+    setIsPerformingDefrag(true)
+    try {
+      await etcdApi.defrag()
+      
+      toast({
+        title: 'Success',
+        description: 'Defragmentation completed successfully',
+      })
+      fetchKeys(searchPrefix)
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: (error as Error).message,
+      })
+    } finally {
+      setIsPerformingDefrag(false)
+    }
+  }
+
   const selectedKeyData = keys.find(k => k.key === selectedKey)
 
   // Formatting functions
@@ -520,7 +582,11 @@ function App() {
         {activeView === 'keys' ? (
           <>
             {/* Cluster Status Card */}
-            <ClusterStatusCard isConnected={isConnected} />
+            <ClusterStatusCard 
+              isConnected={isConnected} 
+              onFeaturesUpdate={setClusterFeatures}
+              onOpenMaintenance={() => setIsMaintenanceDialogOpen(true)}
+            />
             
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
               {/* Sidebar - Key List */}
@@ -861,15 +927,15 @@ function App() {
                   </Select>
                 </div>
                 <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium">Format:</label>
-                  <Select value={compareFormat} onValueChange={(value) => setCompareFormat(value as 'text' | 'json' | 'yaml')}>
+                  <label className="text-sm font-medium">Mode:</label>
+                  <Select value={compareMode} onValueChange={(value) => setCompareMode(value as 'split' | 'unified' | 'diff')}>
                     <SelectTrigger className="w-32">
-                      <SelectValue placeholder="Format" />
+                      <SelectValue placeholder="Mode" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="text">Text</SelectItem>
-                      <SelectItem value="json">JSON</SelectItem>
-                      <SelectItem value="yaml">YAML</SelectItem>
+                      <SelectItem value="split">Split View</SelectItem>
+                      <SelectItem value="unified">Unified View</SelectItem>
+                      <SelectItem value="diff">Word Diff</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -894,44 +960,35 @@ function App() {
               </div>
             )}
             
-            <div className="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
-              {/* Left Version (Old) */}
-              <div className="flex flex-col overflow-hidden">
-                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-medium">
-                    {leftHistory ? `Version ${leftHistory.version}` : 'Loading...'}
-                  </span>
-                </div>
-                <div className="flex-1 border rounded-b-md overflow-hidden">
-                  {leftHistory ? (
-                    <CodeMirror
-                      value={leftHistory.value}
-                      minHeight="200px"
-                      extensions={getCodeMirrorExtensions(compareFormat)}
-                      theme={isDarkMode ? 'dark' : 'light'}
-                      readOnly
-                      className="text-sm h-full"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-[300px] text-gray-400">
-                      Select a version to view
-                    </div>
-                  )}
-                </div>
+            {compareMode === 'diff' ? (
+              <div className="flex-1 border rounded-md overflow-auto bg-white dark:bg-gray-900 p-4">
+                {leftHistory && rightHistory ? (
+                  <WordDiff 
+                    oldValue={leftHistory.value} 
+                    newValue={rightHistory.value}
+                    className="p-4"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-[300px] text-gray-400">
+                    Select both versions to compare
+                  </div>
+                )}
               </div>
-              
-              {/* Right Version (New) */}
-              <div className="flex flex-col overflow-hidden">
-                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
+            ) : compareMode === 'unified' ? (
+              <div className="flex-1 border rounded-md overflow-hidden flex flex-col">
+                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border-b border-gray-200 dark:border-gray-700">
                   <span className="text-sm font-medium">
-                    {rightHistory ? `Version ${rightHistory.version}` : 'Loading...'}
+                    {leftHistory && rightHistory 
+                      ? `${leftHistory.version} → ${rightHistory.version}` 
+                      : 'Select versions to compare'}
                   </span>
                 </div>
-                <div className="flex-1 border rounded-b-md overflow-hidden">
-                  {rightHistory ? (
+                <div className="flex-1 overflow-auto p-4 bg-white dark:bg-gray-900">
+                  {leftHistory && rightHistory ? (
                     <CodeMirror
                       value={rightHistory.value}
                       minHeight="200px"
+                      height="100%"
                       extensions={getCodeMirrorExtensions(compareFormat)}
                       theme={isDarkMode ? 'dark' : 'light'}
                       readOnly
@@ -939,15 +996,174 @@ function App() {
                     />
                   ) : (
                     <div className="flex items-center justify-center h-[300px] text-gray-400">
-                      Select a version to view
+                      Select both versions to compare
                     </div>
                   )}
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
+                <div className="flex flex-col overflow-hidden">
+                  <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
+                    <span className="text-sm font-medium">
+                      {leftHistory ? `Version ${leftHistory.version}` : 'Loading...'}
+                    </span>
+                  </div>
+                  <div className="flex-1 border rounded-b-md overflow-hidden">
+                    {leftHistory ? (
+                      <CodeMirror
+                        value={leftHistory.value}
+                        minHeight="200px"
+                        extensions={getCodeMirrorExtensions(compareFormat)}
+                        theme={isDarkMode ? 'dark' : 'light'}
+                        readOnly
+                        className="text-sm h-full"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-[300px] text-gray-400">
+                        Select a version to view
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex flex-col overflow-hidden">
+                  <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
+                    <span className="text-sm font-medium">
+                      {rightHistory ? `Version ${rightHistory.version}` : 'Loading...'}
+                    </span>
+                  </div>
+                  <div className="flex-1 border rounded-b-md overflow-hidden">
+                    {rightHistory ? (
+                      <CodeMirror
+                        value={rightHistory.value}
+                        minHeight="200px"
+                        extensions={getCodeMirrorExtensions(compareFormat)}
+                        theme={isDarkMode ? 'dark' : 'light'}
+                        readOnly
+                        className="text-sm h-full"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-[300px] text-gray-400">
+                        Select a version to view
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsCompareDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Maintenance Dialog */}
+      <Dialog open={isMaintenanceDialogOpen} onOpenChange={setIsMaintenanceDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wrench className="h-5 w-5" />
+              Cluster Maintenance
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {clusterFeatures && (
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                Detected etcd version: {clusterFeatures.minDefragVersion === 'not supported' ? 'Below 3.3.0' : '3.3.0+'}
+              </div>
+            )}
+            
+            {/* Compact Section */}
+            <div className="border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-medium">Compact Database</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Remove outdated revisions to free up space
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {clusterFeatures && !clusterFeatures.compactSupported && (
+                    <span className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-gray-500">
+                      Not Supported
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Input
+                  type="number"
+                  value={compactRevision}
+                  onChange={(e) => setCompactRevision(e.target.value)}
+                  placeholder="Enter revision number"
+                  disabled={Boolean(clusterFeatures && !clusterFeatures.compactSupported)}
+                  className="w-48"
+                />
+                <Button 
+                  onClick={handleCompact}
+                  disabled={Boolean(clusterFeatures && !clusterFeatures.compactSupported) || isPerformingCompact || !compactRevision}
+                  variant="outline"
+                >
+                  {isPerformingCompact ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Compacting...
+                    </>
+                  ) : (
+                    'Compact'
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Enter a revision number to compact up to. Leave current revision intact.
+              </p>
+            </div>
+            
+            {/* Defrag Section */}
+            <div className="border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-medium">Defragment Database</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Optimize storage by defragmenting database files
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {clusterFeatures && !clusterFeatures.defragSupported && (
+                    <span className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded text-gray-500">
+                      Requires 3.3.0+
+                    </span>
+                  )}
+                </div>
+              </div>
+              <Button 
+                onClick={handleDefrag}
+                disabled={clusterFeatures && !clusterFeatures.defragSupported || isPerformingDefrag}
+                variant="outline"
+              >
+                {isPerformingDefrag ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    Defragmenting...
+                  </>
+                ) : (
+                  <>
+                    <Database className="h-4 w-4 mr-2" />
+                    Defragment
+                  </>
+                )}
+              </Button>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                This operation may take a while and briefly locks the database.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsMaintenanceDialogOpen(false)}>
               Close
             </Button>
           </DialogFooter>

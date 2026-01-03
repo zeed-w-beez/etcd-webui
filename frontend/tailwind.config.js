@@ -5,6 +5,20 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  safelist: [
+    'bg-green-200',
+    'bg-green-800',
+    'text-green-900',
+    'text-green-100',
+    'bg-red-200',
+    'bg-red-800',
+    'text-red-900',
+    'text-red-100',
+    'bg-gray-100',
+    'bg-gray-800',
+    'bg-white',
+    'bg-gray-900',
+  ],
   theme: {
     container: {
       center: true,

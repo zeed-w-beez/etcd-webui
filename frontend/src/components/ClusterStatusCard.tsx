@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { etcdApi, type ClusterStatus } from '@/services/etcd'
+import { etcdApi, type ClusterStatus, type ClusterFeatures } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
-import { Server, Database, HardDrive, Activity, Users, Hash, ChevronDown, ChevronUp } from 'lucide-react'
+import { Server, Database, HardDrive, Activity, Users, Hash, ChevronDown, ChevronUp, Wrench } from 'lucide-react'
 
 interface ClusterStatusCardProps {
   isConnected: boolean
+  onFeaturesUpdate?: (features: ClusterFeatures) => void
+  onOpenMaintenance?: () => void
 }
 
 function formatBytes(bytes: number): string {
@@ -20,7 +22,7 @@ function formatNumber(num: number | bigint): string {
   return num.toLocaleString()
 }
 
-export function ClusterStatusCard({ isConnected }: ClusterStatusCardProps) {
+export function ClusterStatusCard({ isConnected, onFeaturesUpdate, onOpenMaintenance }: ClusterStatusCardProps) {
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -50,6 +52,9 @@ export function ClusterStatusCard({ isConnected }: ClusterStatusCardProps) {
     try {
       const status = await etcdApi.getClusterStatus()
       setClusterStatus(status)
+      if (onFeaturesUpdate && status.features) {
+        onFeaturesUpdate(status.features)
+      }
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -95,6 +100,16 @@ export function ClusterStatusCard({ isConnected }: ClusterStatusCardProps) {
               <Activity className="h-3 w-3" />
               Refresh
             </button>
+            {onOpenMaintenance && (
+              <button 
+                onClick={onOpenMaintenance}
+                className="text-sm text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 flex items-center gap-1"
+                title="Maintenance"
+              >
+                <Wrench className="h-3 w-3" />
+                Maintenance
+              </button>
+            )}
             <button
               onClick={toggleCollapsed}
               className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500"

@@ -14,6 +14,7 @@ type Config struct {
 	DialTimeout  int    `mapstructure:"dial_timeout"`
 	Username     string `mapstructure:"username"`
 	Password     string `mapstructure:"password"`
+	LogLevel     string `mapstructure:"log_level"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -39,6 +40,7 @@ func Load(configPath string) (*Config, error) {
 	v.BindEnv("dial_timeout", "DIAL_TIMEOUT")
 	v.BindEnv("username", "ETCD_USERNAME")
 	v.BindEnv("password", "ETCD_PASSWORD")
+	v.BindEnv("log_level", "LOG_LEVEL")
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

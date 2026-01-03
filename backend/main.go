@@ -14,6 +14,7 @@ import (
 
 	"github.com/etcd-webui/backend/config"
 	"github.com/etcd-webui/backend/internal/handlers"
+	"github.com/etcd-webui/backend/internal/logger"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -27,6 +28,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	logger.Init(cfg)
 
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{cfg.EtcdEndpoint},
@@ -92,6 +95,8 @@ func main() {
 		api.GET("/keys/versions", h.GetKeyVersions)
 		api.GET("/keys/history", h.GetKeyHistory)
 		api.GET("/cluster/status", h.ClusterStatus)
+		api.POST("/cluster/compact", h.Compact)
+		api.POST("/cluster/defrag", h.Defrag)
 		api.GET("/watch", h.Watch)
 	}
 

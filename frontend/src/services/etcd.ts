@@ -65,6 +65,14 @@ export interface ClusterStatus {
   raftAppliedIndex: number
   storageVersion: string
   clusterId: string
+  features: ClusterFeatures
+}
+
+export interface ClusterFeatures {
+  compactSupported: boolean
+  defragSupported: boolean
+  maxCompactRevision: number
+  minDefragVersion: string
 }
 
 export interface WatchEvent {
@@ -282,5 +290,46 @@ export const etcdApi = {
       throw new Error('Failed to fetch cluster status')
     }
     return response.json()
+  },
+
+  async compact(revision: number): Promise<void> {
+    const response = await fetch(`${API_BASE}/cluster/compact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision }),
+    })
+    
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to compact')
+        } catch {
+          throw new Error(`Failed to compact: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to compact: HTTP ${response.status}`)
+    }
+  },
+
+  async defrag(): Promise<void> {
+    const response = await fetch(`${API_BASE}/cluster/defrag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to defragment')
+        } catch {
+          throw new Error(`Failed to defragment: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to defragment: HTTP ${response.status}`)
+    }
   },
 }

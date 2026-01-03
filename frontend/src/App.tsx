@@ -22,7 +22,7 @@ import { type TreeItem, keysToTree } from '@/lib/utils'
 import { ClusterManager } from './components/ClusterManager'
 import { ClusterStatusCard } from './components/ClusterStatusCard'
 import { WatchPanel } from './components/WatchPanel'
-import { WordDiff } from '@/components/WordDiff'
+import { SplitDiff } from '@/components/SplitDiff'
 
 function App() {
   const [keys, setKeys] = useState<EtcdKey[]>([])
@@ -68,8 +68,6 @@ function App() {
   const [rightVersion, setRightVersion] = useState<number | null>(null)
   const [leftHistory, setLeftHistory] = useState<KeyHistoryResponse | null>(null)
   const [rightHistory, setRightHistory] = useState<KeyHistoryResponse | null>(null)
-  const [compareFormat] = useState<'text' | 'json' | 'yaml'>('text')
-  const [compareMode, setCompareMode] = useState<'split' | 'unified' | 'diff'>('split')
   const [isLoadingVersions, setIsLoadingVersions] = useState(false)
   
   // Maintenance states
@@ -78,7 +76,6 @@ function App() {
   const [isPerformingCompact, setIsPerformingCompact] = useState(false)
   const [isPerformingDefrag, setIsPerformingDefrag] = useState(false)
 
-  
   // Update editedValue when selectedKey changes
   useEffect(() => {
     if (selectedKeyData) {
@@ -901,7 +898,7 @@ function App() {
 
       {/* Version Compare Dialog */}
       <Dialog open={isCompareDialogOpen} onOpenChange={setIsCompareDialogOpen}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>Version Comparison</DialogTitle>
           </DialogHeader>
@@ -927,19 +924,6 @@ function App() {
                   </Select>
                 </div>
                 <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium">Mode:</label>
-                  <Select value={compareMode} onValueChange={(value) => setCompareMode(value as 'split' | 'unified' | 'diff')}>
-                    <SelectTrigger className="w-32">
-                      <SelectValue placeholder="Mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="split">Split View</SelectItem>
-                      <SelectItem value="unified">Unified View</SelectItem>
-                      <SelectItem value="diff">Word Diff</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-2">
                   <label className="text-sm font-medium">Right Version:</label>
                   <Select 
                     value={rightVersion?.toString() || ''} 
@@ -960,96 +944,19 @@ function App() {
               </div>
             )}
             
-            {compareMode === 'diff' ? (
-              <div className="flex-1 border rounded-md overflow-auto bg-white dark:bg-gray-900 p-4">
-                {leftHistory && rightHistory ? (
-                  <WordDiff 
-                    oldValue={leftHistory.value} 
-                    newValue={rightHistory.value}
-                    className="p-4"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-[300px] text-gray-400">
-                    Select both versions to compare
-                  </div>
-                )}
-              </div>
-            ) : compareMode === 'unified' ? (
-              <div className="flex-1 border rounded-md overflow-hidden flex flex-col">
-                <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border-b border-gray-200 dark:border-gray-700">
-                  <span className="text-sm font-medium">
-                    {leftHistory && rightHistory 
-                      ? `${leftHistory.version} → ${rightHistory.version}` 
-                      : 'Select versions to compare'}
-                  </span>
+            {leftHistory && rightHistory ? (
+              <div className="flex-1 border rounded-md overflow-auto bg-white dark:bg-gray-900">
+                <div className="sticky top-0 bg-gray-100 dark:bg-gray-800 px-4 py-2 text-sm text-gray-500 border-b">
+                  Comparing v{leftHistory.version} (r{leftHistory.revision}) → v{rightHistory.version} (r{rightHistory.revision})
                 </div>
-                <div className="flex-1 overflow-auto p-4 bg-white dark:bg-gray-900">
-                  {leftHistory && rightHistory ? (
-                    <CodeMirror
-                      value={rightHistory.value}
-                      minHeight="200px"
-                      height="100%"
-                      extensions={getCodeMirrorExtensions(compareFormat)}
-                      theme={isDarkMode ? 'dark' : 'light'}
-                      readOnly
-                      className="text-sm h-full"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-[300px] text-gray-400">
-                      Select both versions to compare
-                    </div>
-                  )}
-                </div>
+                <SplitDiff 
+                  oldValue={leftHistory.value} 
+                  newValue={rightHistory.value}
+                />
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
-                <div className="flex flex-col overflow-hidden">
-                  <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
-                    <span className="text-sm font-medium">
-                      {leftHistory ? `Version ${leftHistory.version}` : 'Loading...'}
-                    </span>
-                  </div>
-                  <div className="flex-1 border rounded-b-md overflow-hidden">
-                    {leftHistory ? (
-                      <CodeMirror
-                        value={leftHistory.value}
-                        minHeight="200px"
-                        extensions={getCodeMirrorExtensions(compareFormat)}
-                        theme={isDarkMode ? 'dark' : 'light'}
-                        readOnly
-                        className="text-sm h-full"
-                      />
-                    ) : (
-                      <div className="flex items-center justify-center h-[300px] text-gray-400">
-                        Select a version to view
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="flex flex-col overflow-hidden">
-                  <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
-                    <span className="text-sm font-medium">
-                      {rightHistory ? `Version ${rightHistory.version}` : 'Loading...'}
-                    </span>
-                  </div>
-                  <div className="flex-1 border rounded-b-md overflow-hidden">
-                    {rightHistory ? (
-                      <CodeMirror
-                        value={rightHistory.value}
-                        minHeight="200px"
-                        extensions={getCodeMirrorExtensions(compareFormat)}
-                        theme={isDarkMode ? 'dark' : 'light'}
-                        readOnly
-                        className="text-sm h-full"
-                      />
-                    ) : (
-                      <div className="flex items-center justify-center h-[300px] text-gray-400">
-                        Select a version to view
-                      </div>
-                    )}
-                  </div>
-                </div>
+              <div className="flex items-center justify-center h-[300px] text-gray-400">
+                Select both versions to compare
               </div>
             )}
           </div>

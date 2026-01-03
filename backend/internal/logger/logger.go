@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/etcd-webui/backend/config"
+	"github.com/zeed-w-beez/etcd-webui/backend/config"
 )
 
 type Level int

@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/etcd-webui/backend/config"
-	"github.com/etcd-webui/backend/internal/handlers"
-	"github.com/etcd-webui/backend/internal/logger"
+	"github.com/zeed-w-beez/etcd-webui/backend/config"
+	"github.com/zeed-w-beez/etcd-webui/backend/internal/handlers"
+	"github.com/zeed-w-beez/etcd-webui/backend/internal/logger"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	clientv3 "go.etcd.io/etcd/client/v3"

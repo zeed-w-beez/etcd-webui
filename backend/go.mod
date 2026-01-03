@@ -1,4 +1,4 @@
-module github.com/etcd-webui/backend
+module github.com/zeed-w-beez/etcd-webui/backend
 
 go 1.21
 

@@ -193,6 +193,85 @@ go build -o etcd-webui main.go
 ./etcd-webui --config config.yaml
 ```
 
+## Docker 部署
+
+### 构建 Docker 镜像
+
+```bash
+docker build -t etcd-webui:latest .
+```
+
+### 使用 Docker 运行
+
+基本用法（连接到主机上的 etcd）：
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  --network host \
+  etcd-webui:latest
+```
+
+使用自定义 etcd 端点（如果 etcd 在另一个容器或远程服务器）：
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  -e ETCD_ENDPOINT=etcd-server:2379 \
+  etcd-webui:latest
+```
+
+使用自定义配置文件：
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  -v /path/to/config.yaml:/app/backend/config.yaml \
+  etcd-webui:latest \
+  --config /app/backend/config.yaml
+```
+
+使用 Docker Compose 运行：
+
+```yaml
+version: '3.8'
+services:
+  etcd-webui:
+    image: etcd-webui:latest
+    container_name: etcd-webui
+    ports:
+      - "8080:8080"
+    environment:
+      - ETCD_ENDPOINT=etcd:2379
+    depends_on:
+      - etcd
+    networks:
+      - etcd-network
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.10
+    container_name: etcd
+    environment:
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+    networks:
+      - etcd-network
+
+networks:
+  etcd-network:
+    driver: bridge
+```
+
+### 环境变量
+
+可以使用以下环境变量来配置应用程序：
+
+- `ETCD_WEBUI_SERVER_PORT`: 服务器端口（默认: 8080）
+- `ETCD_WEBUI_LOG_LEVEL`: 日志级别 - debug, info, warn, error（默认: info）
+
 ## 功能特点
 
 - ✅ 集群状态监控

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/etcd-webui/backend/config"
-	"github.com/etcd-webui/backend/internal/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/zeed-w-beez/etcd-webui/backend/config"
+	"github.com/zeed-w-beez/etcd-webui/backend/internal/logger"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -228,7 +228,7 @@ func (h *Handler) GetClientFromContext(c *gin.Context) (*clientv3.Client, error)
 func (h *Handler) Connect(cfg *config.Config) error {
 	// 默认etcd端点设置
 	etcdEndpoint := "localhost:2379"
-	
+
 	// 使用默认超时值5秒创建默认etcd客户端
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   []string{etcdEndpoint},

@@ -1,7 +1,7 @@
 package router
 
 import (
-	"github.com/etcd-webui/backend/internal/handlers"
+	"github.com/zeed-w-beez/etcd-webui/backend/internal/handlers"
 	"github.com/gin-gonic/gin"
 )
 

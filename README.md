@@ -193,6 +193,85 @@ go build -o etcd-webui main.go
 ./etcd-webui --config config.yaml
 ```
 
+## Docker Deployment
+
+### Build Docker Image
+
+```bash
+docker build -t etcd-webui:latest .
+```
+
+### Run with Docker
+
+Basic usage (connects to etcd on host machine):
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  --network host \
+  etcd-webui:latest
+```
+
+Run with custom etcd endpoint (if etcd is in another container or remote):
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  -e ETCD_ENDPOINT=etcd-server:2379 \
+  etcd-webui:latest
+```
+
+Run with custom configuration file:
+
+```bash
+docker run -d \
+  --name etcd-webui \
+  -p 8080:8080 \
+  -v /path/to/config.yaml:/app/backend/config.yaml \
+  etcd-webui:latest \
+  --config /app/backend/config.yaml
+```
+
+Run with Docker Compose:
+
+```yaml
+version: '3.8'
+services:
+  etcd-webui:
+    image: etcd-webui:latest
+    container_name: etcd-webui
+    ports:
+      - "8080:8080"
+    environment:
+      - ETCD_ENDPOINT=etcd:2379
+    depends_on:
+      - etcd
+    networks:
+      - etcd-network
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.10
+    container_name: etcd
+    environment:
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+    networks:
+      - etcd-network
+
+networks:
+  etcd-network:
+    driver: bridge
+```
+
+### Environment Variables
+
+The following environment variables can be used to configure the application:
+
+- `ETCD_WEBUI_SERVER_PORT`: Server port (default: 8080)
+- `ETCD_WEBUI_LOG_LEVEL`: Log level - debug, info, warn, error (default: info)
+
 ## Features
 
 - ✅ Cluster status monitoring

@@ -1,6 +1,10 @@
 # etcd-webui
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A modern web UI for etcd built with Vite + React + TypeScript frontend and Golang backend.
+
+![etcd-webui screenshot](./screenshot.png)
 
 ## Architecture
 
@@ -112,3 +116,94 @@ Edit `backend/config.yaml` to configure:
 - `dial_timeout`: etcd connection timeout in seconds
 - `username`: etcd authentication username (optional)
 - `password`: etcd authentication password (optional)
+
+## Development Mode
+
+### Frontend Development
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+This will start the Vite development server, but please note that you still need to run the backend to handle API requests.
+
+### Backend Development
+
+```bash
+cd backend
+go mod download
+go run main.go --config config.yaml
+```
+
+## Testing
+
+### Frontend Testing
+
+```bash
+cd frontend
+npm run test
+```
+
+### Backend Testing
+
+```bash
+cd backend
+go test ./...
+```
+
+## Code Style Check
+
+### Frontend
+
+```bash
+cd frontend
+npm run lint
+```
+
+### Backend
+
+```bash
+cd backend
+go fmt ./...
+go vet ./...
+```
+
+## Build Production Version
+
+### 1. Build Frontend
+
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+### 2. Build Backend
+
+```bash
+cd backend
+go build -o etcd-webui main.go
+```
+
+### 3. Run Production Version
+
+```bash
+./etcd-webui --config config.yaml
+```
+
+## Features
+
+- ✅ Cluster status monitoring
+- ✅ Key-value pair management (CRUD operations)
+- ✅ JSON/YAML syntax highlighting
+- ✅ Key-value history and diff comparison
+- ✅ Key prefix search and filtering
+- ✅ Real-time monitoring (Watch)
+- ✅ Multi-cluster support
+- ✅ Authentication support
+
+## Contributing
+
+Contributions are welcome! Please submit issues and pull requests.

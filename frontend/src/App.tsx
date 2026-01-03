@@ -113,7 +113,7 @@ function App() {
     const isNodeExpanded = isExpanded(node.path)
 
     return (
-      <div key={node.key} className="space-y-1">
+      <div key={node.key} className="space-y-1 mt-0.5">
         <div
           onClick={() => {
             if (node.isLeaf) {
@@ -122,7 +122,7 @@ function App() {
               toggleExpand(node.path)
             }
           }}
-          className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all ${selectedKey === node.key
+          className={`flex items-center gap-0.5 p-0.5 rounded-lg cursor-pointer transition-all ${selectedKey === node.key
             ? 'bg-violet-100 dark:bg-violet-900 border-violet-300 dark:border-violet-700 border'
             : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent'}
           `}
@@ -429,7 +429,7 @@ function App() {
                   ) : keys.length === 0 ? (
                     <p className="text-center text-gray-500 py-8">No keys found</p>
                   ) : (
-                    <div className="max-h-[500px] overflow-y-auto">
+                    <div className="max-h-[600px] overflow-y-auto">
                       {tree.map(node => renderTreeNode(node))}
                     </div>
                   )}
@@ -554,11 +554,11 @@ function App() {
 
       {/* Edit Key Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle>Edit Key</DialogTitle>
           </DialogHeader>
-          <div className="py-4">
+          <div className="py-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium">Value</label>
               <div className="flex items-center gap-2">
@@ -583,7 +583,7 @@ function App() {
             </div>
             <CodeMirror
                 value={editValue}
-                height="200px"
+                height="300px"
                 width="100%"
                 extensions={getCodeMirrorExtensions(editValueFormat)}
                 onChange={(val) => setEditValue(val)}

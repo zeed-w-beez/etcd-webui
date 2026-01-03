@@ -31,11 +31,13 @@ func main() {
 
 	logger.Init(cfg)
 
+	// 默认etcd端点设置
+	etcdEndpoint := "localhost:2379"
+
+	// 使用默认超时值5秒创建默认etcd客户端
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.EtcdEndpoint},
-		DialTimeout: cfg.GetDialTimeout(),
-		Username:    cfg.Username,
-		Password:    cfg.Password,
+		Endpoints:   []string{etcdEndpoint},
+		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to etcd: %v", err)
@@ -44,16 +46,17 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = cli.Status(ctx, cfg.EtcdEndpoint)
+	_, err = cli.Status(ctx, etcdEndpoint)
 	if err != nil {
-		log.Printf("Warning: Failed to connect to etcd at %s: %v", cfg.EtcdEndpoint, err)
+		log.Printf("Warning: Failed to connect to etcd at %s: %v", etcdEndpoint, err)
 		log.Println("Make sure etcd is running. The server will start but some features may not work.")
 	}
 
-	h := &handlers.Handler{
-		Client: cli,
-		Prefix: "",
-	}
+	// 创建 ClientManager 实例
+	clientManager := handlers.NewClientManager()
+	
+	// 创建 Handler 实例
+	h := handlers.NewHandler(cli, clientManager, cfg)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -66,23 +69,28 @@ func main() {
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept"}
 	r.Use(cors.New(corsConfig))
 
-	staticDir := cfg.StaticDir
-	if staticDir == "" {
-		staticDir = "../frontend/dist"
+	// Auto-detect static directory with priority
+	var staticDir string
+	var staticExists bool
+	potentialDirs := []string{"./dist", "./frontend/dist", "../frontend/dist"}
+
+	for _, dir := range potentialDirs {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			staticDir = dir
+			staticExists = true
+			break
+		}
 	}
 
-	// Setup static files first (but after API routes are defined)
-	var staticExists bool
-	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		log.Printf("Warning: Static directory not found: %s", staticDir)
+	if !staticExists {
+		log.Printf("Warning: Static directory not found in any of the locations: %v", potentialDirs)
 		log.Println("Frontend must be built first. Run 'npm run build' in the frontend directory.")
-		staticExists = false
-	} else {
-		staticExists = true
 	}
 
 	// API routes - 定义这些路由 BEFORE static files
 	api := r.Group("/api")
+	// 添加 ClusterMiddleware 来处理集群配置
+	api.Use(h.ClusterMiddleware())
 	{
 		api.GET("/health", h.HealthCheck)
 		api.GET("/keys", h.GetKeys)

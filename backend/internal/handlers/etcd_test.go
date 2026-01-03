@@ -22,8 +22,9 @@ func setupTestHandler(t *testing.T) (*Handler, *clientv3.Client) {
 	}
 
 	h := &Handler{
-		Client: cli,
-		Prefix: "/",
+		DefaultClient: cli,
+		Prefix:        "/",
+		ClientManager: NewClientManager(),
 	}
 
 	return h, cli
@@ -40,14 +41,18 @@ func TestHealthCheck(t *testing.T) {
 	h, cli := setupTestHandler(t)
 	defer cli.Close()
 
-	w, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req, _ := http.NewRequest("GET", "/api/health", nil)
-	w.Request = req
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
 
-	h.HealthCheck(w)
+	// Manually set the etcd client in context
+	c.Set("etcdClient", cli)
 
-	if w.Writer.Status() != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Writer.Status())
+	h.HealthCheck(c)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 }
 
@@ -62,14 +67,18 @@ func TestGetKeys(t *testing.T) {
 	cli.Put(ctx, testKey+"/key2", "value2")
 	defer cleanupKey(t, cli, testKey)
 
-	w, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req, _ := http.NewRequest("GET", "/api/keys?prefix="+testKey, nil)
-	w.Request = req
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
 
-	h.GetKeys(w)
+	// Manually set the etcd client in context
+	c.Set("etcdClient", cli)
 
-	if w.Writer.Status() != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w.Writer.Status())
+	h.GetKeys(c)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 }
 
@@ -80,16 +89,21 @@ func TestCreateAndDeleteKey(t *testing.T) {
 
 	testKey := "/test-create-key-" + time.Now().Format("20060102150405")
 
-	w, _ := gin.CreateTestContext(httptest.NewRecorder())
+	// Test CreateKey
 	body := `{"key":"` + testKey + `","value":"test-value"}`
 	req, _ := http.NewRequest("POST", "/api/keys", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	w.Request = req
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
 
-	h.CreateKey(w)
+	// Manually set the etcd client in context
+	c.Set("etcdClient", cli)
 
-	if w.Writer.Status() != http.StatusCreated {
-		t.Errorf("Expected status 201, got %d", w.Writer.Status())
+	h.CreateKey(c)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected status 201, got %d", w.Code)
 	}
 
 	ctx := context.Background()
@@ -98,15 +112,19 @@ func TestCreateAndDeleteKey(t *testing.T) {
 		t.Error("Key was not created in etcd")
 	}
 
-	router := gin.New()
-	router.DELETE("/api/keys", h.DeleteKey)
-	w2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	// Test DeleteKey
 	req2, _ := http.NewRequest("DELETE", "/api/keys?key="+testKey, nil)
-	w2.Request = req2
-	router.ServeHTTP(w2.Writer, w2.Request)
+	w2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Request = req2
 
-	if w2.Writer.Status() != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", w2.Writer.Status())
+	// Manually set the etcd client in context
+	c2.Set("etcdClient", cli)
+
+	h.DeleteKey(c2)
+
+	if w2.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w2.Code)
 	}
 
 	resp, _ = cli.Get(ctx, testKey)

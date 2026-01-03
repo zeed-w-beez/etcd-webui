@@ -1,6 +1,34 @@
-
+import { clusterApi } from './cluster'
 
 const API_BASE = '/api'
+
+interface RequestOptions {
+  method?: string
+  headers?: Record<string, string>
+  body?: any
+}
+
+async function clusterRequest(url: string, options: RequestOptions = {}) {
+  const activeCluster = clusterApi.getActiveCluster()
+  
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  }
+  
+  if (activeCluster) {
+    // 将集群配置转换为base64编码的JSON字符串
+    headers['X-Cluster-Config'] = btoa(JSON.stringify(activeCluster))
+  }
+  
+  const response = await fetch(url, {
+    method: options.method || 'GET',
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  
+  return response
+}
 
 export interface EtcdKey {
   key: string
@@ -102,7 +130,7 @@ export const etcdApi = {
       url += `?${queryString}`
     }
     
-    const response = await fetch(url)
+    const response = await clusterRequest(url)
     if (!response.ok) {
       throw new Error('Failed to fetch keys')
     }
@@ -112,7 +140,7 @@ export const etcdApi = {
   },
 
   async getKey(key: string): Promise<EtcdKey> {
-    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`)
+    const response = await clusterRequest(`${API_BASE}/keys?key=${encodeURIComponent(key)}`)
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -125,7 +153,7 @@ export const etcdApi = {
   },
 
   async getKeyVersions(key: string): Promise<KeyVersionsResponse> {
-    const response = await fetch(`${API_BASE}/keys/versions?key=${encodeURIComponent(key)}`)
+    const response = await clusterRequest(`${API_BASE}/keys/versions?key=${encodeURIComponent(key)}`)
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -143,7 +171,7 @@ export const etcdApi = {
       url += `&revision=${revision}`
     }
     
-    const response = await fetch(url)
+    const response = await clusterRequest(url)
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -156,10 +184,9 @@ export const etcdApi = {
   },
 
   async createKey(key: string, value: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys`, {
+    const response = await clusterRequest(`${API_BASE}/keys`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, value }),
+      body: { key, value },
     })
     
     if (!response.ok) {
@@ -177,10 +204,9 @@ export const etcdApi = {
   },
 
   async updateKey(key: string, value: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
+    const response = await clusterRequest(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ value }),
+      body: { value },
     })
     
     if (!response.ok) {
@@ -198,7 +224,7 @@ export const etcdApi = {
   },
 
   async deleteKey(key: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
+    const response = await clusterRequest(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
       method: 'DELETE',
     })
     
@@ -217,10 +243,9 @@ export const etcdApi = {
   },
 
   async deleteKeys(keys: string[]): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys`, {
+    const response = await clusterRequest(`${API_BASE}/keys`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keys }),
+      body: { keys },
     })
     
     if (!response.ok) {
@@ -238,7 +263,7 @@ export const etcdApi = {
   },
 
   async exportKeys(): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys/export`)
+    const response = await clusterRequest(`${API_BASE}/keys/export`)
     
     if (!response.ok) {
       throw new Error('Failed to export keys')
@@ -256,10 +281,9 @@ export const etcdApi = {
   },
 
   async importKeys(keys: EtcdKey[]): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys/import`, {
+    const response = await clusterRequest(`${API_BASE}/keys/import`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(keys),
+      body: keys,
     })
     
     if (!response.ok) {
@@ -277,7 +301,7 @@ export const etcdApi = {
   },
 
   async checkHealth(): Promise<HealthStatus> {
-    const response = await fetch(`${API_BASE}/health`)
+    const response = await clusterRequest(`${API_BASE}/health`)
     if (!response.ok) {
       return { status: 'unhealthy', etcd: 'error', error: `HTTP ${response.status}` }
     }
@@ -285,7 +309,7 @@ export const etcdApi = {
   },
 
   async getClusterStatus(): Promise<ClusterStatus> {
-    const response = await fetch(`${API_BASE}/cluster/status`)
+    const response = await clusterRequest(`${API_BASE}/cluster/status`)
     if (!response.ok) {
       throw new Error('Failed to fetch cluster status')
     }
@@ -293,10 +317,9 @@ export const etcdApi = {
   },
 
   async compact(revision: number): Promise<void> {
-    const response = await fetch(`${API_BASE}/cluster/compact`, {
+    const response = await clusterRequest(`${API_BASE}/cluster/compact`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision }),
+      body: { revision },
     })
     
     if (!response.ok) {
@@ -314,9 +337,8 @@ export const etcdApi = {
   },
 
   async defrag(): Promise<void> {
-    const response = await fetch(`${API_BASE}/cluster/defrag`, {
+    const response = await clusterRequest(`${API_BASE}/cluster/defrag`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
     })
     
     if (!response.ok) {

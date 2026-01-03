@@ -1,7 +1,2 @@
 log_level: "info" # debug, info, warn, error
-etcd_endpoint: "localhost:2379"
 server_port: 8080
-static_dir: "../frontend/dist"
-dial_timeout: 5
-# username: "your-username"
-# password: "your-password"

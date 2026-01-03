@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/etcd-webui/backend/config"
@@ -16,9 +19,95 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// ClusterConfig represents the etcd cluster configuration from frontend
+type ClusterConfig struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Endpoint    string `json:"endpoint"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	TLS         bool   `json:"tls"`
+	DialTimeout int    `json:"dialTimeout"`
+}
+
+// ClientManager manages etcd clients for different clusters
+type ClientManager struct {
+	clients map[string]*clientv3.Client
+	configs map[string]*ClusterConfig
+	mutex   sync.RWMutex
+}
+
+// NewClientManager creates a new client manager
+func NewClientManager() *ClientManager {
+	return &ClientManager{
+		clients: make(map[string]*clientv3.Client),
+		configs: make(map[string]*ClusterConfig),
+	}
+}
+
+// GetClient returns the etcd client for the given cluster ID, or creates a new one if it doesn't exist
+func (cm *ClientManager) GetClient(clusterConfig *ClusterConfig) (*clientv3.Client, error) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	// Check if client already exists for this cluster
+	if client, exists := cm.clients[clusterConfig.ID]; exists {
+		// Check if configuration has changed
+		if cfg, exists := cm.configs[clusterConfig.ID]; exists && cfg.Endpoint == clusterConfig.Endpoint && cfg.Username == clusterConfig.Username && cfg.Password == clusterConfig.Password && cfg.DialTimeout == clusterConfig.DialTimeout {
+			return client, nil
+		}
+		// Close old client if configuration has changed
+		client.Close()
+	}
+
+	// Set default dial timeout if not provided
+	dialTimeout := 5 // Default 5 seconds
+	if clusterConfig.DialTimeout > 0 {
+		dialTimeout = clusterConfig.DialTimeout
+	}
+
+	// Create new client
+	clientConfig := clientv3.Config{
+		Endpoints:   []string{clusterConfig.Endpoint},
+		DialTimeout: time.Duration(dialTimeout) * time.Second,
+	}
+
+	// Add authentication if provided
+	if clusterConfig.Username != "" && clusterConfig.Password != "" {
+		clientConfig.Username = clusterConfig.Username
+		clientConfig.Password = clusterConfig.Password
+	}
+
+	cli, err := clientv3.New(clientConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store client and configuration
+	cm.clients[clusterConfig.ID] = cli
+	cm.configs[clusterConfig.ID] = clusterConfig
+
+	return cli, nil
+}
+
+// Close closes all clients
+func (cm *ClientManager) Close() {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	for _, client := range cm.clients {
+		client.Close()
+	}
+
+	cm.clients = make(map[string]*clientv3.Client)
+	cm.configs = make(map[string]*ClusterConfig)
+}
+
 type Handler struct {
-	Client *clientv3.Client
-	Prefix string
+	ClientManager *ClientManager
+	DefaultClient *clientv3.Client
+	Prefix        string
+	Config        *config.Config
 }
 
 type EtcdKey struct {
@@ -67,25 +156,89 @@ type DeleteKeysRequest struct {
 	Keys []string `json:"keys"`
 }
 
-func NewHandler(client *clientv3.Client) *Handler {
+func NewHandler(client *clientv3.Client, clientManager *ClientManager, cfg *config.Config) *Handler {
 	return &Handler{
-		Client: client,
-		Prefix: "",
+		DefaultClient: client,
+		ClientManager: clientManager,
+		Prefix:        "",
+		Config:        cfg,
 	}
 }
 
+// ClusterMiddleware is a middleware that parses cluster configuration from request header
+func (h *Handler) ClusterMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Check for X-Cluster-Config header
+		clusterHeader := c.GetHeader("X-Cluster-Config")
+		if clusterHeader == "" {
+			// No cluster config provided, use default client
+			c.Set("etcdClient", h.DefaultClient)
+			c.Next()
+			return
+		}
+
+		// Decode base64 encoded cluster config
+		decoded, err := base64.StdEncoding.DecodeString(clusterHeader)
+		if err != nil {
+			logger.Error("Failed to decode cluster config: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid cluster configuration"})
+			c.Abort()
+			return
+		}
+
+		// Parse JSON cluster config
+		var clusterConfig ClusterConfig
+		if err := json.Unmarshal(decoded, &clusterConfig); err != nil {
+			logger.Error("Failed to parse cluster config: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid cluster configuration format"})
+			c.Abort()
+			return
+		}
+
+		// Get or create etcd client for this cluster
+		client, err := h.ClientManager.GetClient(&clusterConfig)
+		if err != nil {
+			logger.Error("Failed to get etcd client: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to connect to etcd cluster: %v", err)})
+			c.Abort()
+			return
+		}
+
+		// Store client in context
+		c.Set("etcdClient", client)
+		c.Next()
+	}
+}
+
+// GetClientFromContext returns the etcd client from the context
+func (h *Handler) GetClientFromContext(c *gin.Context) (*clientv3.Client, error) {
+	client, exists := c.Get("etcdClient")
+	if !exists {
+		return nil, fmt.Errorf("etcd client not found in context")
+	}
+
+	etcdClient, ok := client.(*clientv3.Client)
+	if !ok {
+		return nil, fmt.Errorf("invalid etcd client type")
+	}
+
+	return etcdClient, nil
+}
+
 func (h *Handler) Connect(cfg *config.Config) error {
+	// 默认etcd端点设置
+	etcdEndpoint := "localhost:2379"
+	
+	// 使用默认超时值5秒创建默认etcd客户端
 	cli, err := clientv3.New(clientv3.Config{
-		Endpoints:   []string{cfg.EtcdEndpoint},
-		DialTimeout: cfg.GetDialTimeout(),
-		Username:    cfg.Username,
-		Password:    cfg.Password,
+		Endpoints:   []string{etcdEndpoint},
+		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
 		return err
 	}
 
-	h.Client = cli
+	h.DefaultClient = cli
 	return nil
 }
 
@@ -98,13 +251,14 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		Etcd:   "disconnected",
 	}
 
-	if h.Client == nil {
-		status.Error = "etcd client not initialized"
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		status.Error = "etcd client not available"
 		c.JSON(http.StatusServiceUnavailable, status)
 		return
 	}
 
-	resp, err := h.Client.Status(ctx, h.Client.Endpoints()[0])
+	resp, err := client.Status(ctx, client.Endpoints()[0])
 	if err != nil {
 		status.Error = err.Error()
 		c.JSON(http.StatusServiceUnavailable, status)
@@ -120,6 +274,12 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	prefix := c.Query("prefix")
 	limit := c.DefaultQuery("limit", "100")
 	limitNum, _ := strconv.ParseInt(limit, 10, 64)
@@ -132,7 +292,7 @@ func (h *Handler) GetKeys(c *gin.Context) {
 		clientv3.WithPrefix(),
 	}
 
-	resp, err := h.Client.Get(ctx, prefix, append(opts, clientv3.WithLimit(limitNum))...)
+	resp, err := client.Get(ctx, prefix, append(opts, clientv3.WithLimit(limitNum))...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -199,6 +359,12 @@ func (h *Handler) GetKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	// 优先从查询参数获取key
 	key := c.Query("key")
 	// 如果查询参数为空，尝试从路径参数获取
@@ -215,7 +381,7 @@ func (h *Handler) GetKey(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.Client.Get(ctx, key)
+	resp, err := client.Get(ctx, key)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -240,6 +406,12 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	key := c.Query("key")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
@@ -248,8 +420,8 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 
 	revisionStr := c.Query("revision")
 	var revision int64
-	var err error
 	if revisionStr != "" {
+		var err error
 		revision, err = strconv.ParseInt(revisionStr, 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid revision"})
@@ -257,7 +429,7 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.Client.Get(ctx, key)
+	resp, err := client.Get(ctx, key)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -270,7 +442,7 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 
 	var kv *mvccpb.KeyValue
 	if revision > 0 {
-		resp, err = h.Client.Get(ctx, key, clientv3.WithRev(revision), clientv3.WithLimit(1))
+		resp, err = client.Get(ctx, key, clientv3.WithRev(revision), clientv3.WithLimit(1))
 		if err != nil {
 			logger.Error("Error fetching key %s at revision %d: %v", key, revision, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -300,13 +472,19 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	key := c.Query("key")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
 	}
 
-	resp, err := h.Client.Get(ctx, key)
+	resp, err := client.Get(ctx, key)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -331,7 +509,7 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 		}
 
 		for rev := startRev; rev <= currentModRev; rev++ {
-			histResp, err := h.Client.Get(ctx, key, clientv3.WithRev(rev), clientv3.WithLimit(1))
+			histResp, err := client.Get(ctx, key, clientv3.WithRev(rev), clientv3.WithLimit(1))
 			if err == nil && histResp.Count > 0 {
 				histKv := histResp.Kvs[0]
 				version := histKv.Version
@@ -369,13 +547,19 @@ func (h *Handler) CreateKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	var req CreateKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	_, err := h.Client.Put(ctx, req.Key, req.Value)
+	_, err = client.Put(ctx, req.Key, req.Value)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -390,6 +574,12 @@ func (h *Handler) CreateKey(c *gin.Context) {
 func (h *Handler) UpdateKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
+
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
 
 	// 优先从查询参数获取key
 	key := c.Query("key")
@@ -413,7 +603,7 @@ func (h *Handler) UpdateKey(c *gin.Context) {
 		return
 	}
 
-	_, err := h.Client.Put(ctx, key, req.Value)
+	_, err = client.Put(ctx, key, req.Value)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -428,6 +618,12 @@ func (h *Handler) UpdateKey(c *gin.Context) {
 func (h *Handler) DeleteKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
+
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
 
 	// 优先从查询参数获取key
 	key := c.Query("key")
@@ -450,7 +646,7 @@ func (h *Handler) DeleteKey(c *gin.Context) {
 		delOpts = append(delOpts, clientv3.WithPrefix())
 	}
 
-	delResp, err := h.Client.Delete(ctx, key, delOpts...)
+	delResp, err := client.Delete(ctx, key, delOpts...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -466,6 +662,12 @@ func (h *Handler) DeleteKeys(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	var req DeleteKeysRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -474,7 +676,7 @@ func (h *Handler) DeleteKeys(c *gin.Context) {
 
 	deleted := 0
 	for _, key := range req.Keys {
-		delResp, err := h.Client.Delete(ctx, key)
+		delResp, err := client.Delete(ctx, key)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "key": key})
 			return
@@ -493,7 +695,13 @@ func (h *Handler) ExportKeys(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	resp, err := h.Client.Get(ctx, "", clientv3.WithPrefix())
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
+	resp, err := client.Get(ctx, "", clientv3.WithPrefix())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -517,6 +725,12 @@ func (h *Handler) ImportKeys(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	var keys []EtcdKey
 	if err := c.ShouldBindJSON(&keys); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -524,7 +738,7 @@ func (h *Handler) ImportKeys(c *gin.Context) {
 	}
 
 	// Start a transaction to ensure atomicity
-	txn := h.Client.Txn(ctx)
+	txn := client.Txn(ctx)
 	ops := make([]clientv3.Op, 0, len(keys))
 
 	for _, kv := range keys {
@@ -599,12 +813,19 @@ func (h *Handler) Watch(c *gin.Context) {
 	// Get prefix from query parameter
 	prefix := c.Query("prefix")
 
+	// Get etcd client
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		conn.WriteJSON(gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	// Create context that cancels when the WebSocket connection closes
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
 	// Watch etcd for changes
-	watchChan := h.Client.Watch(ctx, prefix, clientv3.WithPrefix())
+	watchChan := client.Watch(ctx, prefix, clientv3.WithPrefix())
 
 	// Send watch events to WebSocket client
 	for watchResp := range watchChan {
@@ -672,15 +893,21 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	// Get status of all members
-	memberList, err := h.Client.MemberList(ctx)
+	memberList, err := client.MemberList(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Get current revision from a simple range query
-	resp, err := h.Client.Get(ctx, "\x00", clientv3.WithRange("\xFF"), clientv3.WithLimit(1))
+	resp, err := client.Get(ctx, "\x00", clientv3.WithRange("\xFF"), clientv3.WithLimit(1))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -699,7 +926,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 	for _, member := range memberList.Members {
 		// Try to get status for each endpoint
 		for _, endpoint := range member.ClientURLs {
-			status, err := h.Client.Status(ctx, endpoint)
+			status, err := client.Status(ctx, endpoint)
 			if err != nil {
 				continue
 			}
@@ -737,7 +964,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 
 	// Get total keys count using a proper range query
 	var totalKeys int64
-	keysResp, err := h.Client.Get(ctx, "\x00", clientv3.WithFromKey(), clientv3.WithCountOnly())
+	keysResp, err := client.Get(ctx, "\x00", clientv3.WithFromKey(), clientv3.WithCountOnly())
 	if err == nil {
 		totalKeys = int64(keysResp.Count)
 	}
@@ -790,9 +1017,11 @@ func (h *Handler) getClusterFeatures(version string) ClusterFeatures {
 }
 
 func (h *Handler) Close() {
-	if h.Client != nil {
-		h.Client.Close()
+	if h.DefaultClient != nil {
+		h.DefaultClient.Close()
 	}
+	// Close all clients in the client manager
+	h.ClientManager.Close()
 }
 
 type CompactRequest struct {
@@ -851,6 +1080,12 @@ func (h *Handler) Compact(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
 	var req CompactRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -862,7 +1097,7 @@ func (h *Handler) Compact(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.Client.Compact(ctx, req.Revision)
+	resp, err := client.Compact(ctx, req.Revision)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -881,7 +1116,13 @@ func (h *Handler) Defrag(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
 
-	memberList, err := h.Client.MemberList(ctx)
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
+	memberList, err := client.MemberList(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -891,12 +1132,12 @@ func (h *Handler) Defrag(c *gin.Context) {
 
 	for _, member := range memberList.Members {
 		for _, endpoint := range member.ClientURLs {
-			status, err := h.Client.Status(ctx, endpoint)
+			status, err := client.Status(ctx, endpoint)
 			if err != nil {
 				continue
 			}
 
-			_, err = h.Client.Defragment(ctx, endpoint)
+			_, err = client.Defragment(ctx, endpoint)
 			if err != nil {
 				results = append(results, DefragResponse{
 					MemberEndpoint: endpoint,

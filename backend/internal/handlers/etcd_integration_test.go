@@ -22,8 +22,9 @@ func setupIntegrationTestHandler(t *testing.T) (*Handler, *clientv3.Client) {
 	}
 
 	h := &Handler{
-		Client: cli,
-		Prefix: "",
+		DefaultClient: cli,
+		Prefix:        "",
+		ClientManager: NewClientManager(),
 	}
 
 	return h, cli
@@ -42,8 +43,13 @@ func TestUpdateKeyIntegration(t *testing.T) {
 		t.Fatalf("Failed to setup test key: %v", err)
 	}
 
+	// Create a router with middleware to set etcd client
 	router := gin.New()
-	router.PUT("/api/keys", h.UpdateKey)
+	router.PUT("/api/keys", func(c *gin.Context) {
+		// Manually set the etcd client in context
+		c.Set("etcdClient", cli)
+		h.UpdateKey(c)
+	})
 
 	body := `{"value":"updated-value"}`
 	req, _ := http.NewRequest("PUT", "/api/keys?key="+testKey, strings.NewReader(body))
@@ -83,7 +89,11 @@ func TestDeleteKeyIntegration(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.DELETE("/api/keys", h.DeleteKey)
+	router.DELETE("/api/keys", func(c *gin.Context) {
+		// Manually set the etcd client in context
+		c.Set("etcdClient", cli)
+		h.DeleteKey(c)
+	})
 
 	req, _ := http.NewRequest("DELETE", "/api/keys?key="+testKey, nil)
 	w := httptest.NewRecorder()
@@ -116,7 +126,11 @@ func TestUpdateKeyWithEncodedSlashes(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.PUT("/api/keys", h.UpdateKey)
+	router.PUT("/api/keys", func(c *gin.Context) {
+		// Manually set the etcd client in context
+		c.Set("etcdClient", cli)
+		h.UpdateKey(c)
+	})
 
 	body := `{"value":"updated"}`
 	req, _ := http.NewRequest("PUT", "/api/keys?key="+testKey, strings.NewReader(body))
@@ -150,10 +164,24 @@ func TestKeyRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	router := gin.New()
-	router.POST("/api/keys", h.CreateKey)
-	router.PUT("/api/keys", h.UpdateKey)
-	router.GET("/api/keys", h.GetKey)
-	router.DELETE("/api/keys", h.DeleteKey)
+
+	// Add middleware to set etcd client for all routes
+	router.POST("/api/keys", func(c *gin.Context) {
+		c.Set("etcdClient", cli)
+		h.CreateKey(c)
+	})
+	router.PUT("/api/keys", func(c *gin.Context) {
+		c.Set("etcdClient", cli)
+		h.UpdateKey(c)
+	})
+	router.GET("/api/keys", func(c *gin.Context) {
+		c.Set("etcdClient", cli)
+		h.GetKey(c)
+	})
+	router.DELETE("/api/keys", func(c *gin.Context) {
+		c.Set("etcdClient", cli)
+		h.DeleteKey(c)
+	})
 
 	createBody := `{"key":"` + testKey + `","value":"v1"}`
 	req, _ := http.NewRequest("POST", "/api/keys", strings.NewReader(createBody))

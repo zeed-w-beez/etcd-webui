@@ -104,7 +104,7 @@ export const etcdApi = {
   },
 
   async getKey(key: string): Promise<EtcdKey> {
-    const response = await fetch(`${API_BASE}/keys/${encodeURIComponent(key)}`)
+    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`)
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -117,7 +117,7 @@ export const etcdApi = {
   },
 
   async getKeyVersions(key: string): Promise<KeyVersionsResponse> {
-    const response = await fetch(`${API_BASE}/keys/${encodeURIComponent(key)}/versions`)
+    const response = await fetch(`${API_BASE}/keys/versions?key=${encodeURIComponent(key)}`)
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -130,9 +130,9 @@ export const etcdApi = {
   },
 
   async getKeyHistory(key: string, revision?: number): Promise<KeyHistoryResponse> {
-    let url = `${API_BASE}/keys/${encodeURIComponent(key)}/history`
+    let url = `${API_BASE}/keys/history?key=${encodeURIComponent(key)}`
     if (revision !== undefined) {
-      url += `?revision=${revision}`
+      url += `&revision=${revision}`
     }
     
     const response = await fetch(url)
@@ -169,7 +169,7 @@ export const etcdApi = {
   },
 
   async updateKey(key: string, value: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys/${encodeURIComponent(key)}`, {
+    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -190,7 +190,7 @@ export const etcdApi = {
   },
 
   async deleteKey(key: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/keys/${encodeURIComponent(key)}`, {
+    const response = await fetch(`${API_BASE}/keys?key=${encodeURIComponent(key)}`, {
       method: 'DELETE',
     })
     

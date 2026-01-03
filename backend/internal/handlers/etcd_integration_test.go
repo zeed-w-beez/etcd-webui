@@ -43,10 +43,10 @@ func TestUpdateKeyIntegration(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.PUT("/api/keys/*key", h.UpdateKey)
+	router.PUT("/api/keys", h.UpdateKey)
 
 	body := `{"value":"updated-value"}`
-	req, _ := http.NewRequest("PUT", "/api/keys"+testKey, strings.NewReader(body))
+	req, _ := http.NewRequest("PUT", "/api/keys?key="+testKey, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -83,9 +83,9 @@ func TestDeleteKeyIntegration(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.DELETE("/api/keys/*key", h.DeleteKey)
+	router.DELETE("/api/keys", h.DeleteKey)
 
-	req, _ := http.NewRequest("DELETE", "/api/keys"+testKey, nil)
+	req, _ := http.NewRequest("DELETE", "/api/keys?key="+testKey, nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -116,10 +116,10 @@ func TestUpdateKeyWithEncodedSlashes(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.PUT("/api/keys/*key", h.UpdateKey)
+	router.PUT("/api/keys", h.UpdateKey)
 
 	body := `{"value":"updated"}`
-	req, _ := http.NewRequest("PUT", "/api/keys"+testKey, strings.NewReader(body))
+	req, _ := http.NewRequest("PUT", "/api/keys?key="+testKey, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -151,9 +151,9 @@ func TestKeyRoundTrip(t *testing.T) {
 
 	router := gin.New()
 	router.POST("/api/keys", h.CreateKey)
-	router.PUT("/api/keys/*key", h.UpdateKey)
-	router.GET("/api/keys/*key", h.GetKey)
-	router.DELETE("/api/keys/*key", h.DeleteKey)
+	router.PUT("/api/keys", h.UpdateKey)
+	router.GET("/api/keys", h.GetKey)
+	router.DELETE("/api/keys", h.DeleteKey)
 
 	createBody := `{"key":"` + testKey + `","value":"v1"}`
 	req, _ := http.NewRequest("POST", "/api/keys", strings.NewReader(createBody))
@@ -165,7 +165,7 @@ func TestKeyRoundTrip(t *testing.T) {
 		t.Fatalf("Create failed: %d %s", w.Code, w.Body.String())
 	}
 
-	req, _ = http.NewRequest("GET", "/api/keys"+testKey, nil)
+	req, _ = http.NewRequest("GET", "/api/keys?key="+testKey, nil)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -174,7 +174,7 @@ func TestKeyRoundTrip(t *testing.T) {
 	}
 
 	updateBody := `{"value":"v2"}`
-	req, _ = http.NewRequest("PUT", "/api/keys"+testKey, strings.NewReader(updateBody))
+	req, _ = http.NewRequest("PUT", "/api/keys?key="+testKey, strings.NewReader(updateBody))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -183,7 +183,7 @@ func TestKeyRoundTrip(t *testing.T) {
 		t.Fatalf("Update failed: %d %s", w.Code, w.Body.String())
 	}
 
-	req, _ = http.NewRequest("DELETE", "/api/keys"+testKey, nil)
+	req, _ = http.NewRequest("DELETE", "/api/keys?key="+testKey, nil)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

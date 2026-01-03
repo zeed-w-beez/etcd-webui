@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,43 +63,52 @@ func main() {
 	corsConfig.AllowHeaders = []string{"Origin", "Content-Type", "Accept"}
 	r.Use(cors.New(corsConfig))
 
-	api := r.Group("/api")
-	{
-		api.GET("/health", h.HealthCheck)
-		api.GET("/keys", h.GetKeys)
-		api.GET("/keys/:key", h.GetKey)
-		api.GET("/keys/:key/versions", h.GetKeyVersions)
-		api.GET("/keys/:key/history", h.GetKeyHistory)
-		api.POST("/keys", h.CreateKey)
-		api.PUT("/keys/:key", h.UpdateKey)
-		api.DELETE("/keys/:key", h.DeleteKey)
-		api.DELETE("/keys", h.DeleteKeys)
-		api.GET("/keys/export", h.ExportKeys)
-		api.POST("/keys/import", h.ImportKeys)
-		api.GET("/cluster/status", h.ClusterStatus)
-		api.GET("/watch", h.Watch)
-	}
-
 	staticDir := cfg.StaticDir
 	if staticDir == "" {
 		staticDir = "../frontend/dist"
 	}
 
+	// Setup static files first (but after API routes are defined)
+	var staticExists bool
 	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
 		log.Printf("Warning: Static directory not found: %s", staticDir)
 		log.Println("Frontend must be built first. Run 'npm run build' in the frontend directory.")
+		staticExists = false
 	} else {
-		r.NoRoute(func(c *gin.Context) {
-			filePath := staticDir + c.Request.URL.Path
-			if _, err := os.Stat(filePath); os.IsNotExist(err) {
-				c.File(staticDir + "/index.html")
-			} else {
-				c.File(filePath)
-			}
-		})
+		staticExists = true
+	}
+
+	// API routes - 定义这些路由 BEFORE static files
+	api := r.Group("/api")
+	{
+		api.GET("/health", h.HealthCheck)
+		api.GET("/keys", h.GetKeys)
+		api.POST("/keys", h.CreateKey)
+		api.PUT("/keys", h.UpdateKey)
+		api.DELETE("/keys", h.DeleteKey)
+		api.DELETE("/keys/batch", h.DeleteKeys)
+		api.GET("/keys/export", h.ExportKeys)
+		api.POST("/keys/import", h.ImportKeys)
+		api.GET("/keys/versions", h.GetKeyVersions)
+		api.GET("/keys/history", h.GetKeyHistory)
+		api.GET("/cluster/status", h.ClusterStatus)
+		api.GET("/watch", h.Watch)
+	}
+
+	// Static files
+	if staticExists {
 		r.StaticFile("/", staticDir+"/index.html")
 		r.Static("/assets", staticDir+"/assets")
 	}
+
+	// Catch-all handler for client-side routing
+	r.NoRoute(func(c *gin.Context) {
+		if staticExists && !strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.File(staticDir + "/index.html")
+		} else {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Endpoint not found"})
+		}
+	})
 
 	addr := fmt.Sprintf(":%d", cfg.ServerPort)
 	srv := &http.Server{

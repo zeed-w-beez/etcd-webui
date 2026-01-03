@@ -68,6 +68,7 @@ function App() {
   const [rightHistory, setRightHistory] = useState<KeyHistoryResponse | null>(null)
   const [compareFormat, setCompareFormat] = useState<'text' | 'json' | 'yaml'>('text')
   const [isLoadingVersions, setIsLoadingVersions] = useState(false)
+
   
   // Update editedValue when selectedKey changes
   useEffect(() => {
@@ -76,6 +77,8 @@ function App() {
     }
     fetchKeyVersions(selectedKey)
   }, [selectedKey])
+
+
   
   const { toast } = useToast()
 
@@ -788,7 +791,7 @@ function App() {
             </div>
             <CodeMirror
                 value={editValue}
-                height="300px"
+                minHeight="200px"
                 width="100%"
                 extensions={getCodeMirrorExtensions(editValueFormat)}
                 onChange={(val: string) => setEditValue(val)}
@@ -892,6 +895,7 @@ function App() {
             )}
             
             <div className="grid grid-cols-2 gap-4 flex-1 overflow-hidden">
+              {/* Left Version (Old) */}
               <div className="flex flex-col overflow-hidden">
                 <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
                   <span className="text-sm font-medium">
@@ -902,7 +906,7 @@ function App() {
                   {leftHistory ? (
                     <CodeMirror
                       value={leftHistory.value}
-                      height="300px"
+                      minHeight="200px"
                       extensions={getCodeMirrorExtensions(compareFormat)}
                       theme={isDarkMode ? 'dark' : 'light'}
                       readOnly
@@ -916,6 +920,7 @@ function App() {
                 </div>
               </div>
               
+              {/* Right Version (New) */}
               <div className="flex flex-col overflow-hidden">
                 <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded-t-md border border-b-0 border-gray-200 dark:border-gray-700">
                   <span className="text-sm font-medium">
@@ -926,7 +931,7 @@ function App() {
                   {rightHistory ? (
                     <CodeMirror
                       value={rightHistory.value}
-                      height="300px"
+                      minHeight="200px"
                       extensions={getCodeMirrorExtensions(compareFormat)}
                       theme={isDarkMode ? 'dark' : 'light'}
                       readOnly

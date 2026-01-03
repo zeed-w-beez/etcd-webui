@@ -52,7 +52,10 @@ describe('etcdApi', () => {
 
   describe('getKey', () => {
     it('should encode key with special characters', async () => {
-      const mockKey: EtcdKey = { key: '/test/key', value: 'test value' }
+      const mockKey: EtcdKey = {
+        key: '/test/key',
+        value: 'test value'
+      }
 
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
@@ -62,7 +65,7 @@ describe('etcdApi', () => {
 
       await etcdApi.getKey('/test/key')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/keys/%2Ftest%2Fkey')
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys?key=%2Ftest%2Fkey')
     })
   })
 
@@ -98,7 +101,7 @@ describe('etcdApi', () => {
   })
 
   describe('updateKey', () => {
-    it('should update key with encoded key in URL', async () => {
+    it('should update key with encoded key in query parameter', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -107,7 +110,7 @@ describe('etcdApi', () => {
 
       await etcdApi.updateKey('/test/key', 'updated value')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/keys/%2Ftest%2Fkey', {
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys?key=%2Ftest%2Fkey', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: 'updated value' }),
@@ -123,7 +126,7 @@ describe('etcdApi', () => {
 
       await etcdApi.updateKey('/a/b/c/d/key', 'value')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/keys/%2Fa%2Fb%2Fc%2Fd%2Fkey', {
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys?key=%2Fa%2Fb%2Fc%2Fd%2Fkey', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: 'value' }),
@@ -145,7 +148,7 @@ describe('etcdApi', () => {
   })
 
   describe('deleteKey', () => {
-    it('should delete key with encoded key in URL', async () => {
+    it('should delete key with encoded key in query parameter', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -154,7 +157,7 @@ describe('etcdApi', () => {
 
       await etcdApi.deleteKey('/test/key')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/keys/%2Ftest%2Fkey', {
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys?key=%2Ftest%2Fkey', {
         method: 'DELETE',
       })
     })
@@ -168,7 +171,7 @@ describe('etcdApi', () => {
 
       await etcdApi.deleteKey('/test/key with spaces')
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/keys/%2Ftest%2Fkey%20with%20spaces', {
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys?key=%2Ftest%2Fkey%20with%20spaces', {
         method: 'DELETE',
       })
     })

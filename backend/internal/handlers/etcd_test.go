@@ -99,9 +99,9 @@ func TestCreateAndDeleteKey(t *testing.T) {
 	}
 
 	router := gin.New()
-	router.DELETE("/api/keys/*key", h.DeleteKey)
+	router.DELETE("/api/keys", h.DeleteKey)
 	w2, _ := gin.CreateTestContext(httptest.NewRecorder())
-	req2, _ := http.NewRequest("DELETE", "/api/keys"+testKey, nil)
+	req2, _ := http.NewRequest("DELETE", "/api/keys?key="+testKey, nil)
 	w2.Request = req2
 	router.ServeHTTP(w2.Writer, w2.Request)
 

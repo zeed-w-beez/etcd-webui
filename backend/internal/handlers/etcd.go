@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 )
 
 type Handler struct {
@@ -156,11 +156,60 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	})
 }
 
+func (h *Handler) HandleKeys(c *gin.Context) {
+	key := c.Param("key")
+	// 添加前导斜杠，因为通配符路由不会包含它
+	if key != "" && !strings.HasPrefix(key, "/") {
+		key = "/" + key
+	}
+
+	path := c.Request.URL.Path
+	method := c.Request.Method
+
+	// 根据路径和方法决定处理逻辑
+	if strings.HasSuffix(path, "/versions") {
+		if method == "GET" {
+			h.GetKeyVersions(c)
+			return
+		}
+	} else if strings.HasSuffix(path, "/history") {
+		if method == "GET" {
+			h.GetKeyHistory(c)
+			return
+		}
+	} else if key != "" && method == "GET" {
+		h.GetKey(c)
+		return
+	} else if key != "" && method == "POST" {
+		h.CreateKey(c)
+		return
+	} else if key != "" && method == "PUT" {
+		h.UpdateKey(c)
+		return
+	} else if key != "" && method == "DELETE" {
+		h.DeleteKey(c)
+		return
+	}
+
+	// 如果没有匹配的处理程序，返回404
+	c.JSON(http.StatusNotFound, gin.H{"error": "Endpoint not found"})
+}
+
 func (h *Handler) GetKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
-	key := c.Param("key")
+	// 优先从查询参数获取key
+	key := c.Query("key")
+	// 如果查询参数为空，尝试从路径参数获取
+	if key == "" {
+		key = c.Param("key")
+		// 移除路径参数中的前缀斜杠（仅当从路径参数获取时）
+		if strings.HasPrefix(key, "/") {
+			key = key[1:]
+		}
+	}
+
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
@@ -191,7 +240,7 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	key := c.Param("key")
+	key := c.Query("key")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
@@ -208,7 +257,7 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.Client.Get(ctx, key, clientv3.WithRev(revision))
+	resp, err := h.Client.Get(ctx, key)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -219,7 +268,26 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 		return
 	}
 
-	kv := resp.Kvs[0]
+	var kv *mvccpb.KeyValue
+	if revision > 0 {
+		resp, err = h.Client.Get(ctx, key, clientv3.WithRev(revision), clientv3.WithLimit(1))
+		if err != nil {
+			log.Printf("Error fetching key %s at revision %d: %v", key, revision, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		log.Printf("Fetched key %s at revision %d: count=%d", key, revision, resp.Count)
+		if resp.Count == 0 {
+			log.Printf("No data found for key %s at revision %d", key, revision)
+			c.JSON(http.StatusNotFound, gin.H{"error": "key not found at specified revision"})
+			return
+		}
+		kv = resp.Kvs[0]
+		log.Printf("Found value at revision %d: %s (ModRevision=%d)", kv.ModRevision, kv.Value, kv.ModRevision)
+	} else {
+		kv = resp.Kvs[0]
+	}
+	log.Printf("Returning value for key %s: %s (revision %d, version %d)", key, kv.Value, kv.ModRevision, kv.Version)
 	c.JSON(http.StatusOK, KeyHistoryResponse{
 		Key:      string(kv.Key),
 		Value:    string(kv.Value),
@@ -232,7 +300,7 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	key := c.Param("key")
+	key := c.Query("key")
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
@@ -250,21 +318,49 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 	}
 
 	kv := resp.Kvs[0]
-	createRevision := kv.CreateRevision
-	currentVersion := kv.Version
+	currentVersion := int(kv.Version)
+	currentModRev := kv.ModRevision
 
 	versions := make([]map[string]int64, 0)
-	for v := int64(1); v <= currentVersion; v++ {
+	versionsMap := make(map[int64]int64)
+
+	if currentVersion <= 5 {
+		startRev := currentModRev - int64(currentVersion*3)
+		if startRev < 1 {
+			startRev = 1
+		}
+
+		for rev := startRev; rev <= currentModRev; rev++ {
+			histResp, err := h.Client.Get(ctx, key, clientv3.WithRev(rev), clientv3.WithLimit(1))
+			if err == nil && histResp.Count > 0 {
+				histKv := histResp.Kvs[0]
+				version := histKv.Version
+				if existingRev, exists := versionsMap[version]; !exists || existingRev < histKv.ModRevision {
+					versionsMap[version] = histKv.ModRevision
+				}
+			}
+		}
+
+		for v := 1; v <= currentVersion; v++ {
+			if rev, exists := versionsMap[int64(v)]; exists {
+				versions = append(versions, map[string]int64{
+					"version":  int64(v),
+					"revision": rev,
+				})
+			}
+		}
+	}
+
+	if len(versions) == 0 {
 		versions = append(versions, map[string]int64{
-			"version":  v,
-			"revision": createRevision + v - 1,
+			"version":  kv.Version,
+			"revision": kv.ModRevision,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"key":            key,
 		"currentVersion": currentVersion,
-		"createRevision": createRevision,
 		"versions":       versions,
 	})
 }
@@ -295,7 +391,17 @@ func (h *Handler) UpdateKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	key := c.Param("key")
+	// 优先从查询参数获取key
+	key := c.Query("key")
+	// 如果查询参数为空，尝试从路径参数获取
+	if key == "" {
+		key = c.Param("key")
+		// 移除路径参数中的前缀斜杠（仅当从路径参数获取时）
+		if strings.HasPrefix(key, "/") {
+			key = key[1:]
+		}
+	}
+
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
@@ -323,7 +429,17 @@ func (h *Handler) DeleteKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	key := c.Param("key")
+	// 优先从查询参数获取key
+	key := c.Query("key")
+	// 如果查询参数为空，尝试从路径参数获取
+	if key == "" {
+		key = c.Param("key")
+		// 移除路径参数中的前缀斜杠（仅当从路径参数获取时）
+		if strings.HasPrefix(key, "/") {
+			key = key[1:]
+		}
+	}
+
 	if key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
 		return
@@ -641,11 +757,4 @@ func (h *Handler) Close() {
 	if h.Client != nil {
 		h.Client.Close()
 	}
-}
-
-func decodeKey(key string) string {
-	if decoded, err := base64.StdEncoding.DecodeString(key); err == nil {
-		return string(decoded)
-	}
-	return key
 }

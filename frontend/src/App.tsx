@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Edit2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw } from 'lucide-react'
+import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
@@ -53,6 +53,17 @@ function App() {
   // View state
   type View = 'keys' | 'clusters' | 'watch'
   const [activeView, setActiveView] = useState<View>('keys')
+  
+  // Edit state for key detail
+  const [editedValue, setEditedValue] = useState('')
+  const [valueFormat, setValueFormat] = useState<'text' | 'json' | 'yaml'>('text')
+  
+  // Update editedValue when selectedKey changes
+  useEffect(() => {
+    if (selectedKeyData) {
+      setEditedValue(selectedKeyData.value)
+    }
+  }, [selectedKey])
   
   const { toast } = useToast()
 
@@ -240,17 +251,29 @@ function App() {
     }
   }
 
-  const openEditDialog = () => {
-    const key = keys.find(k => k.key === selectedKey)
-    if (key) {
-      setEditValue(key.value)
-      setIsEditDialogOpen(true)
-    }
-  }
-
   const openDeleteDialog = () => {
     setDeleteKeyName(selectedKey || '')
     setIsDeleteDialogOpen(true)
+  }
+
+  const saveEditValue = async () => {
+    if (!selectedKey || !selectedKeyData) return
+    
+    try {
+      await etcdApi.updateKey(selectedKey, editedValue)
+      
+      toast({
+        title: 'Success',
+        description: 'Key updated successfully',
+      })
+      fetchKeys(searchPrefix)
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: (error as Error).message,
+      })
+    }
   }
 
   const selectedKeyData = keys.find(k => k.key === selectedKey)
@@ -439,7 +462,21 @@ function App() {
               {/* Detail Panel */}
               <Card className="lg:col-span-2">
                 <CardHeader>
-                  <CardTitle className="text-lg">Key Details</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">Key Details</CardTitle>
+                    {selectedKey && selectedKeyData && (
+                      <Select value={valueFormat} onValueChange={(value) => setValueFormat(value as 'text' | 'json' | 'yaml')}>
+                        <SelectTrigger className="w-32">
+                          <SelectValue placeholder="Format" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="json">JSON</SelectItem>
+                          <SelectItem value="yaml">YAML</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {selectedKey && selectedKeyData ? (
@@ -450,16 +487,35 @@ function App() {
                       </div>
                       <div className="mb-4">
                         <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Value</label>
-                        <Textarea
-                          value={selectedKeyData.value}
-                          readOnly
-                          className="mt-1 font-mono text-sm bg-gray-50 dark:bg-gray-800"
-                        />
+                        <div className={`mt-1 border rounded-md ${!validateValue(editedValue, valueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}>
+                          <CodeMirror
+                            value={editedValue}
+                            height="200px"
+                            extensions={getCodeMirrorExtensions(valueFormat)}
+                            theme={isDarkMode ? 'dark' : 'light'}
+                            onChange={(value) => setEditedValue(value)}
+                            className="text-sm"
+                          />
+                        </div>
+                        {!validateValue(editedValue, valueFormat) && (
+                          <p className="text-xs text-red-500 mt-1">Invalid {valueFormat} format</p>
+                        )}
                       </div>
                       <div className="flex gap-2">
-                        <Button variant="outline" onClick={openEditDialog}>
-                          <Edit2 className="h-4 w-4 mr-1" />
-                          Edit
+                        <Button 
+                          variant="outline"
+                          onClick={() => setEditedValue(selectedKeyData.value)}
+                          disabled={editedValue === selectedKeyData.value}
+                        >
+                          <RotateCcw className="h-4 w-4 mr-1" />
+                          Reset
+                        </Button>
+                        <Button 
+                          onClick={saveEditValue}
+                          disabled={editedValue === selectedKeyData.value || !validateValue(editedValue, valueFormat)}
+                        >
+                          <RotateCcw className="h-4 w-4 mr-1" />
+                          Save
                         </Button>
                         <Button variant="destructive" onClick={openDeleteDialog}>
                           <Trash2 className="h-4 w-4 mr-1" />

@@ -102,8 +102,16 @@ export const etcdApi = {
     })
     
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to create key')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to create key')
+        } catch {
+          throw new Error(`Failed to create key: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to create key: HTTP ${response.status}`)
     }
   },
 
@@ -115,8 +123,16 @@ export const etcdApi = {
     })
     
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to update key')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to update key')
+        } catch {
+          throw new Error(`Failed to update key: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to update key: HTTP ${response.status}`)
     }
   },
 
@@ -126,8 +142,16 @@ export const etcdApi = {
     })
     
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to delete key')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to delete key')
+        } catch {
+          throw new Error(`Failed to delete key: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to delete key: HTTP ${response.status}`)
     }
   },
 
@@ -139,8 +163,16 @@ export const etcdApi = {
     })
     
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to delete keys')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to delete keys')
+        } catch {
+          throw new Error(`Failed to delete keys: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to delete keys: HTTP ${response.status}`)
     }
   },
 
@@ -170,8 +202,16 @@ export const etcdApi = {
     })
     
     if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to import keys')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to import keys')
+        } catch {
+          throw new Error(`Failed to import keys: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to import keys: HTTP ${response.status}`)
     }
   },
 

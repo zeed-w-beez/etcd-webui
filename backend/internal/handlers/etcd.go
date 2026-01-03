@@ -111,9 +111,12 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	limit := c.DefaultQuery("limit", "100")
 	limitNum, _ := strconv.ParseInt(limit, 10, 64)
 
-	opts := []clientv3.OpOption{}
-	if prefix != "" {
-		opts = append(opts, clientv3.WithPrefix())
+	if prefix == "" {
+		prefix = "/"
+	}
+
+	opts := []clientv3.OpOption{
+		clientv3.WithPrefix(),
 	}
 
 	resp, err := h.Client.Get(ctx, prefix, append(opts, clientv3.WithLimit(limitNum))...)
@@ -526,7 +529,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 		RaftIndex:        raftIndex,
 		RaftTerm:         raftTerm,
 		RaftAppliedIndex: raftAppliedIndex,
-		StorageVersion:   fmt.Sprintf("v%d", etcdVersion),
+		StorageVersion:   "v" + etcdVersion,
 		ClusterID:        fmt.Sprintf("%x", memberList.Header.ClusterId),
 	})
 }

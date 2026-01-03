@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.etcd.io/etcd/client/v3"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func setupTestHandler(t *testing.T) (*Handler, *clientv3.Client) {
@@ -22,8 +22,8 @@ func setupTestHandler(t *testing.T) (*Handler, *clientv3.Client) {
 	}
 
 	h := &Handler{
-		client: cli,
-		prefix: "",
+		Client: cli,
+		Prefix: "/",
 	}
 
 	return h, cli
@@ -40,7 +40,7 @@ func TestHealthCheck(t *testing.T) {
 	h, cli := setupTestHandler(t)
 	defer cli.Close()
 
-	w := gin.CreateTestContext(httptest.NewRecorder())
+	w, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req, _ := http.NewRequest("GET", "/api/health", nil)
 	w.Request = req
 
@@ -62,7 +62,7 @@ func TestGetKeys(t *testing.T) {
 	cli.Put(ctx, testKey+"/key2", "value2")
 	defer cleanupKey(t, cli, testKey)
 
-	w := gin.CreateTestContext(httptest.NewRecorder())
+	w, _ := gin.CreateTestContext(httptest.NewRecorder())
 	req, _ := http.NewRequest("GET", "/api/keys?prefix="+testKey, nil)
 	w.Request = req
 
@@ -80,7 +80,7 @@ func TestCreateAndDeleteKey(t *testing.T) {
 
 	testKey := "/test-create-key-" + time.Now().Format("20060102150405")
 
-	w := gin.CreateTestContext(httptest.NewRecorder())
+	w, _ := gin.CreateTestContext(httptest.NewRecorder())
 	body := `{"key":"` + testKey + `","value":"test-value"}`
 	req, _ := http.NewRequest("POST", "/api/keys", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -98,11 +98,12 @@ func TestCreateAndDeleteKey(t *testing.T) {
 		t.Error("Key was not created in etcd")
 	}
 
-	w2 := gin.CreateTestContext(httptest.NewRecorder())
-	req2, _ := http.NewRequest("DELETE", "/api/keys/"+testKey, nil)
+	router := gin.New()
+	router.DELETE("/api/keys/*key", h.DeleteKey)
+	w2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req2, _ := http.NewRequest("DELETE", "/api/keys"+testKey, nil)
 	w2.Request = req2
-
-	h.DeleteKey(w2)
+	router.ServeHTTP(w2.Writer, w2.Request)
 
 	if w2.Writer.Status() != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", w2.Writer.Status())

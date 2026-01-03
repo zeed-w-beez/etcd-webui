@@ -586,7 +586,7 @@ function App() {
                 height="300px"
                 width="100%"
                 extensions={getCodeMirrorExtensions(editValueFormat)}
-                onChange={(val) => setEditValue(val)}
+                onChange={(val: string) => setEditValue(val)}
                 className={`mt-1 border rounded-md overflow-hidden ${!validateValue(editValue, editValueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}
               />
             {!validateValue(editValue, editValueFormat) && (

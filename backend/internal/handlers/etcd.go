@@ -40,18 +40,18 @@ type KeysResponse struct {
 }
 
 type KeyResponse struct {
-	Key          string `json:"key"`
-	Value        string `json:"value"`
-	Version      int64  `json:"version"`
-	ModRevision  int64  `json:"modRevision"`
-	CreateRevision int64 `json:"createRevision"`
+	Key            string `json:"key"`
+	Value          string `json:"value"`
+	Version        int64  `json:"version"`
+	ModRevision    int64  `json:"modRevision"`
+	CreateRevision int64  `json:"createRevision"`
 }
 
 type KeyHistoryResponse struct {
-	Key       string `json:"key"`
-	Value     string `json:"value"`
-	Revision  int64  `json:"revision"`
-	Version   int64  `json:"version"`
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Revision int64  `json:"revision"`
+	Version  int64  `json:"version"`
 }
 
 type CreateKeyRequest struct {
@@ -179,10 +179,10 @@ func (h *Handler) GetKey(c *gin.Context) {
 
 	kv := resp.Kvs[0]
 	c.JSON(http.StatusOK, KeyResponse{
-		Key:          string(kv.Key),
-		Value:        string(kv.Value),
-		Version:      kv.Version,
-		ModRevision:  kv.ModRevision,
+		Key:            string(kv.Key),
+		Value:          string(kv.Value),
+		Version:        kv.Version,
+		ModRevision:    kv.ModRevision,
 		CreateRevision: kv.CreateRevision,
 	})
 }
@@ -256,7 +256,7 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 	versions := make([]map[string]int64, 0)
 	for v := int64(1); v <= currentVersion; v++ {
 		versions = append(versions, map[string]int64{
-			"version": v,
+			"version":  v,
 			"revision": createRevision + v - 1,
 		})
 	}
@@ -505,12 +505,14 @@ func (h *Handler) Watch(c *gin.Context) {
 			case clientv3.EventTypePut:
 				watchEvent.Type = "PUT"
 				watchEvent.NewValue = string(event.Kv.Value)
-				if len(event.PrevKv.Value) > 0 {
+				if event.PrevKv != nil && len(event.PrevKv.Value) > 0 {
 					watchEvent.OldValue = string(event.PrevKv.Value)
 				}
 			case clientv3.EventTypeDelete:
 				watchEvent.Type = "DELETE"
-				watchEvent.OldValue = string(event.PrevKv.Value)
+				if event.PrevKv != nil {
+					watchEvent.OldValue = string(event.PrevKv.Value)
+				}
 			}
 
 			// Send event to client

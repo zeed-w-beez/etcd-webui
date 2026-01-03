@@ -31,6 +31,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
+  const [isAllExpanded, setIsAllExpanded] = useState(false)
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme')
     if (saved) return saved === 'dark'
@@ -129,6 +130,28 @@ function App() {
 
   const isExpanded = (path: string) => {
     return expandedNodes.has(path)
+  }
+
+  const toggleExpandAll = () => {
+    if (isAllExpanded) {
+      // 当前全部已展开，则折叠所有
+      setExpandedNodes(new Set())
+      setIsAllExpanded(false)
+    } else {
+      // 当前未全部展开，则展开所有
+      const allPaths = new Set<string>()
+      
+      const collectPaths = (node: TreeItem) => {
+        if (!node.isLeaf) {
+          allPaths.add(node.path)
+        }
+        node.children.forEach(child => collectPaths(child))
+      }
+      
+      tree.forEach(node => collectPaths(node))
+      setExpandedNodes(allPaths)
+      setIsAllExpanded(true)
+    }
   }
 
   const renderTreeNode = (node: TreeItem, level: number = 0) => {
@@ -503,6 +526,12 @@ function App() {
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <CardTitle className="text-lg">Keys</CardTitle>
                   <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={toggleExpandAll} aria-label={isAllExpanded ? "Collapse All" : "Expand All"} title={isAllExpanded ? "Collapse All" : "Expand All"}>
+                      {isAllExpanded ? 
+                        <ChevronRight className="h-4 w-4" /> : 
+                        <ChevronDown className="h-4 w-4" />
+                      }
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => fetchKeys(searchPrefix)}>
                       <RotateCcw className="h-4 w-4 mr-1" />
                       Refresh

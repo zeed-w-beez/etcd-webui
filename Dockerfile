@@ -1,16 +1,20 @@
 # 第一阶段：构建前端
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-COPY frontend/package*.json ./
-RUN npm ci
+# 复制 package.json
+COPY frontend/package.json ./
 
+# 安装依赖
+RUN npm install --no-audit --no-fund
+
+# 复制前端源代码
 COPY frontend/ .
 RUN npm run build
 
 # 第二阶段：构建后端
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.24-alpine AS backend-builder
 
 WORKDIR /app/backend
 

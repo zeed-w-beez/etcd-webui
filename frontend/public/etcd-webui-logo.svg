@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#41D1FF"></stop>
+      <stop offset="100%" stop-color="#BD34FE"></stop>
+    </linearGradient>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFEA83"></stop>
+      <stop offset="100%" stop-color="#FFA800"></stop>
+    </linearGradient>
+  </defs>
+  
+  <!-- 背景圆形 -->
+  <circle cx="128" cy="128" r="100" fill="url(#grad1)" opacity="0.9"></circle>
+  
+  <!-- 简化数据库圆柱体 -->
+  <rect x="78" y="90" width="100" height="80" rx="6" ry="6" fill="white" opacity="0.9"></rect>
+  
+  <!-- 数据库顶部 -->
+  <rect x="73" y="70" width="110" height="25" rx="4" ry="4" fill="url(#grad2)"></rect>
+  
+  <!-- 简化键值表示 -->
+  <rect x="88" y="110" width="80" height="12" rx="2" ry="2" fill="#BD34FE" opacity="0.7"></rect>
+  <rect x="88" y="135" width="60" height="12" rx="2" ry="2" fill="#41D1FF" opacity="0.7"></rect>
+</svg>

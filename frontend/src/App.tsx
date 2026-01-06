@@ -75,6 +75,10 @@ function App() {
   const [compactRevision, setCompactRevision] = useState('')
   const [isPerformingCompact, setIsPerformingCompact] = useState(false)
   const [isPerformingDefrag, setIsPerformingDefrag] = useState(false)
+  
+  // Copy states
+  const [copiedKey, setCopiedKey] = useState(false)
+  const [copiedValue, setCopiedValue] = useState(false)
 
   // Update editedValue when selectedKey changes
   useEffect(() => {
@@ -315,6 +319,29 @@ function App() {
         variant: 'destructive',
         title: 'Error',
         description: (error as Error).message,
+      })
+    }
+  }
+
+  const copyToClipboard = async (text: string, type: 'key' | 'value') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      if (type === 'key') {
+        setCopiedKey(true)
+        setTimeout(() => setCopiedKey(false), 2000)
+      } else {
+        setCopiedValue(true)
+        setTimeout(() => setCopiedValue(false), 2000)
+      }
+      toast({
+        title: 'Success',
+        description: `${type === 'key' ? 'Key' : 'Value'} copied to clipboard`,
+      })
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Failed to copy to clipboard',
       })
     }
   }
@@ -675,7 +702,22 @@ function App() {
                   {selectedKey && selectedKeyData ? (
                     <div>
                       <div className="mb-4">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Key</label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Key</label>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => copyToClipboard(selectedKey, 'key')}
+                            title="Copy key"
+                          >
+                            {copiedKey ? (
+                              <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                            ) : (
+                              <Copy className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                         <p className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded mt-1 break-all">{selectedKey}</p>
                       </div>
                       {selectedKeyData && (
@@ -701,7 +743,22 @@ function App() {
                         </div>
                       )}
                       <div className="mb-4">
-                        <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Value</label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Value</label>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => copyToClipboard(editedValue, 'value')}
+                            title="Copy value"
+                          >
+                            {copiedValue ? (
+                              <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                            ) : (
+                              <Copy className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                         <div className={`mt-1 border rounded-md ${!validateValue(editedValue, valueFormat) ? 'border-red-500' : 'border-gray-200 dark:border-gray-700'}`}>
                           <CodeMirror
                             value={editedValue}

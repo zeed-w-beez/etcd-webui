@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare, RefreshCw, Wrench, Check, Copy } from 'lucide-react'
+import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare, RefreshCw, Wrench, Check, Copy, Activity } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
@@ -22,6 +22,7 @@ import { type TreeItem, keysToTree } from '@/lib/utils'
 import { ClusterManager } from './components/ClusterManager'
 import { ClusterStatusCard } from './components/ClusterStatusCard'
 import { WatchPanel } from './components/WatchPanel'
+import { MetricsPanel } from './components/MetricsPanel'
 import { SplitDiff } from '@/components/SplitDiff'
 
 function App() {
@@ -53,7 +54,7 @@ function App() {
   const [deleteKeyName, setDeleteKeyName] = useState('')
   
   // View state
-  type View = 'keys' | 'clusters' | 'watch'
+  type View = 'keys' | 'clusters' | 'watch' | 'metrics'
   const [activeView, setActiveView] = useState<View>('keys')
   
   // Edit state for key detail
@@ -553,6 +554,14 @@ function App() {
                   <Database className="h-4 w-4 mr-1" />
                   Watch
                 </Button>
+                <Button 
+                  variant={activeView === 'metrics' ? 'default' : 'outline'} 
+                  size="sm" 
+                  onClick={() => setActiveView('metrics')}
+                >
+                  <Activity className="h-4 w-4 mr-1" />
+                  Metrics
+                </Button>
               </div>
               
               {/* Theme toggle and Connection status */}
@@ -596,6 +605,13 @@ function App() {
               onClick={() => setActiveView('watch')}
             >
               Watch
+            </Button>
+            <Button 
+              variant="ghost" 
+              className={`${activeView === 'metrics' ? '!bg-white/20 !border-b-2 !border-white' : 'hover:!bg-white/10'} text-white rounded-t-lg`}
+              onClick={() => setActiveView('metrics')}
+            >
+              Metrics
             </Button>
           </div>
         </div>
@@ -814,7 +830,7 @@ function App() {
           </>
         ) : activeView === 'clusters' ? (
           <ClusterManager onClusterChange={fetchKeys} />
-        ) : (
+        ) : activeView === 'watch' ? (
           <>
             {/* Cluster Status Card */}
             <ClusterStatusCard isConnected={isConnected} />
@@ -823,6 +839,8 @@ function App() {
               <WatchPanel isConnected={isConnected} />
             </div>
           </>
+        ) : (
+          <MetricsPanel />
         )}
       </div>
 

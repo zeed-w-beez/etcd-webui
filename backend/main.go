@@ -105,6 +105,7 @@ func main() {
 		api.GET("/cluster/status", h.ClusterStatus)
 		api.POST("/cluster/compact", h.Compact)
 		api.POST("/cluster/defrag", h.Defrag)
+		api.GET("/cluster/metrics", h.GetMetrics)
 		api.GET("/watch", h.Watch)
 	}
 

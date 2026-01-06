@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -1390,4 +1392,296 @@ func (h *Handler) Defrag(c *gin.Context) {
 		"successCount": successCount,
 		"failedCount":  len(results) - successCount,
 	})
+}
+
+// MetricsResponse represents the parsed metrics data
+type MetricsResponse struct {
+	ServerVersion string                 `json:"serverVersion"`
+	ClusterID     string                 `json:"clusterId"`
+	Members       []MemberMetrics        `json:"members"`
+	Summary       MetricsSummary         `json:"summary"`
+	RawMetrics    map[string]interface{} `json:"rawMetrics,omitempty"`
+}
+
+// MemberMetrics represents metrics for a single etcd member
+type MemberMetrics struct {
+	Endpoint           string `json:"endpoint"`
+	IsLeader           bool   `json:"isLeader"`
+	DBSize             int64  `json:"dbSize"`
+	DBSizeInUse        int64  `json:"dbSizeInUse"`
+	RaftIndex          uint64 `json:"raftIndex"`
+	RaftTerm           uint64 `json:"raftTerm"`
+	RaftAppliedIndex   uint64 `json:"raftAppliedIndex"`
+	RaftCommittedIndex uint64 `json:"raftCommittedIndex"`
+}
+
+// MetricsSummary represents aggregated metrics
+type MetricsSummary struct {
+	TotalRequests    float64 `json:"totalRequests"`
+	TotalKeys        int64   `json:"totalKeys"`
+	TotalDBSize      int64   `json:"totalDbSize"`
+	TotalDBSizeInUse int64   `json:"totalDbSizeInUse"`
+	AverageLatency   float64 `json:"averageLatency"`
+	LeaderCount      int     `json:"leaderCount"`
+	FollowerCount    int     `json:"followerCount"`
+	RaftProposals    float64 `json:"raftProposals"`
+	RaftCommitted    float64 `json:"raftCommitted"`
+	RaftApplied      float64 `json:"raftApplied"`
+}
+
+// GetClusterConfigFromContext returns the cluster config from the context
+func (h *Handler) GetClusterConfigFromContext(c *gin.Context) (*ClusterConfig, error) {
+	config, exists := c.Get("clusterConfig")
+	if !exists {
+		return nil, fmt.Errorf("cluster config not found in context")
+	}
+
+	clusterConfig, ok := config.(*ClusterConfig)
+	if !ok {
+		return nil, fmt.Errorf("invalid cluster config type")
+	}
+
+	return clusterConfig, nil
+}
+
+// GetMetrics fetches and parses etcd metrics
+func (h *Handler) GetMetrics(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
+	// Get cluster config to determine HTTP endpoint
+	clusterConfig, err := h.GetClusterConfigFromContext(c)
+	var metricsURL string
+	if err == nil && clusterConfig != nil {
+		// Use cluster config endpoint
+		endpoint := normalizeEndpoint(clusterConfig.Endpoint)
+		// Convert gRPC endpoint to HTTP endpoint (usually same host, different port or /metrics path)
+		// etcd metrics are typically on port 2379 (same as gRPC) or 2381
+		metricsURL = fmt.Sprintf("http://%s/metrics", endpoint)
+	} else {
+		// Use default endpoint
+		endpoints := client.Endpoints()
+		if len(endpoints) == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no etcd endpoints available"})
+			return
+		}
+		metricsURL = fmt.Sprintf("http://%s/metrics", endpoints[0])
+	}
+
+	// Fetch metrics from etcd HTTP endpoint
+	req, err := http.NewRequestWithContext(ctx, "GET", metricsURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to create request: %v", err)})
+		return
+	}
+
+	// Add authentication if available
+	if clusterConfig != nil && clusterConfig.Username != "" && clusterConfig.Password != "" {
+		req.SetBasicAuth(clusterConfig.Username, clusterConfig.Password)
+	}
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		// Try alternative port (2381 is common for metrics)
+		if clusterConfig != nil {
+			endpoint := normalizeEndpoint(clusterConfig.Endpoint)
+			parts := strings.Split(endpoint, ":")
+			if len(parts) == 2 {
+				metricsURL = fmt.Sprintf("http://%s:2381/metrics", parts[0])
+			} else {
+				metricsURL = fmt.Sprintf("http://%s:2381/metrics", endpoint)
+			}
+		} else {
+			endpoints := client.Endpoints()
+			if len(endpoints) > 0 {
+				parts := strings.Split(endpoints[0], ":")
+				if len(parts) == 2 {
+					metricsURL = fmt.Sprintf("http://%s:2381/metrics", parts[0])
+				}
+			}
+		}
+
+		req, err = http.NewRequestWithContext(ctx, "GET", metricsURL, nil)
+		if err == nil {
+			if clusterConfig != nil && clusterConfig.Username != "" && clusterConfig.Password != "" {
+				req.SetBasicAuth(clusterConfig.Username, clusterConfig.Password)
+			}
+			resp, err = httpClient.Do(req)
+		}
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to fetch metrics: %v", err)})
+			return
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("metrics endpoint returned status %d", resp.StatusCode)})
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to read metrics: %v", err)})
+		return
+	}
+
+	// Parse Prometheus format metrics
+	metrics := parsePrometheusMetrics(string(body))
+
+	// Get cluster status for additional info
+	statusResp, err := client.Status(ctx, client.Endpoints()[0])
+	var members []MemberMetrics
+	var summary MetricsSummary
+	var serverVersion string
+	var clusterID string
+
+	if err == nil && statusResp != nil {
+		serverVersion = statusResp.Version
+		clusterID = fmt.Sprintf("%x", statusResp.Header.ClusterId)
+		memberList, err := client.MemberList(ctx)
+		if err == nil {
+			for _, member := range memberList.Members {
+				for _, endpoint := range member.ClientURLs {
+					memberStatus, err := client.Status(ctx, endpoint)
+					if err != nil {
+						continue
+					}
+
+					isLeader := memberStatus.Leader == memberStatus.Header.MemberId
+					memberMetrics := MemberMetrics{
+						Endpoint:           endpoint,
+						IsLeader:           isLeader,
+						DBSize:             memberStatus.DbSize,
+						DBSizeInUse:        memberStatus.DbSizeInUse,
+						RaftIndex:          memberStatus.RaftIndex,
+						RaftTerm:           memberStatus.RaftTerm,
+						RaftAppliedIndex:   memberStatus.RaftAppliedIndex,
+						RaftCommittedIndex: memberStatus.RaftIndex, // Use RaftIndex as committed index approximation
+					}
+
+					members = append(members, memberMetrics)
+
+					if isLeader {
+						summary.LeaderCount++
+					} else {
+						summary.FollowerCount++
+					}
+					summary.TotalDBSize += memberStatus.DbSize
+					summary.TotalDBSizeInUse += memberStatus.DbSizeInUse
+					break
+				}
+			}
+		}
+
+		summary.TotalKeys = statusResp.DbSize
+	}
+
+	// Extract key metrics from Prometheus format
+	if val, ok := metrics["etcd_server_requests_total"]; ok {
+		if f, ok := val.(float64); ok {
+			summary.TotalRequests = f
+		}
+	}
+
+	if val, ok := metrics["etcd_debugging_mvcc_keys_total"]; ok {
+		if f, ok := val.(float64); ok {
+			summary.TotalKeys = int64(f)
+		}
+	}
+
+	// Extract Raft metrics
+	if val, ok := metrics["etcd_server_proposals_total"]; ok {
+		if f, ok := val.(float64); ok {
+			summary.RaftProposals = f
+		}
+	}
+	if val, ok := metrics["etcd_server_proposals_committed_total"]; ok {
+		if f, ok := val.(float64); ok {
+			summary.RaftCommitted = f
+		}
+	}
+	if val, ok := metrics["etcd_server_proposals_applied_total"]; ok {
+		if f, ok := val.(float64); ok {
+			summary.RaftApplied = f
+		}
+	}
+
+	// Ensure members is never nil
+	if members == nil {
+		members = []MemberMetrics{}
+	}
+
+	response := MetricsResponse{
+		ServerVersion: serverVersion,
+		ClusterID:     clusterID,
+		Members:       members,
+		Summary:       summary,
+		RawMetrics:    metrics,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// parsePrometheusMetrics parses Prometheus format metrics into a map
+func parsePrometheusMetrics(metricsText string) map[string]interface{} {
+	result := make(map[string]interface{})
+	lines := strings.Split(metricsText, "\n")
+
+	// Prometheus metric format: metric_name{labels} value
+	metricRegex := regexp.MustCompile(`^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+(.+)$`)
+	histogramRegex := regexp.MustCompile(`^([a-zA-Z_:][a-zA-Z0-9_:]*)_(bucket|sum|count)\s+(.+)$`)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Try to match regular metric
+		matches := metricRegex.FindStringSubmatch(line)
+		if len(matches) == 3 {
+			metricName := matches[1]
+			valueStr := matches[2]
+
+			// Parse value
+			if value, err := strconv.ParseFloat(valueStr, 64); err == nil {
+				// For histograms, aggregate bucket values
+				if strings.HasSuffix(metricName, "_bucket") {
+					baseName := strings.TrimSuffix(metricName, "_bucket")
+					if existing, ok := result[baseName].(float64); ok {
+						result[baseName] = existing + value
+					} else {
+						result[baseName] = value
+					}
+				} else {
+					result[metricName] = value
+				}
+			}
+			continue
+		}
+
+		// Try to match histogram metric
+		histMatches := histogramRegex.FindStringSubmatch(line)
+		if len(histMatches) == 4 {
+			baseName := histMatches[1]
+			suffix := histMatches[2]
+			valueStr := histMatches[3]
+
+			if value, err := strconv.ParseFloat(valueStr, 64); err == nil {
+				key := fmt.Sprintf("%s_%s", baseName, suffix)
+				result[key] = value
+			}
+		}
+	}
+
+	return result
 }

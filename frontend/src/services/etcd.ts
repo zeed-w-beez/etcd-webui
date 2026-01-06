@@ -363,4 +363,55 @@ export const etcdApi = {
       throw new Error(`Failed to defragment: HTTP ${response.status}`)
     }
   },
+
+  async getMetrics(): Promise<MetricsResponse> {
+    const response = await clusterRequest(`${API_BASE}/cluster/metrics`)
+    
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to fetch metrics')
+        } catch {
+          throw new Error(`Failed to fetch metrics: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to fetch metrics: HTTP ${response.status}`)
+    }
+    
+    return response.json()
+  },
+}
+
+export interface MemberMetrics {
+  endpoint: string
+  isLeader: boolean
+  dbSize: number
+  dbSizeInUse: number
+  raftIndex: number
+  raftTerm: number
+  raftAppliedIndex: number
+  raftCommittedIndex: number
+}
+
+export interface MetricsSummary {
+  totalRequests: number
+  totalKeys: number
+  totalDbSize: number
+  totalDbSizeInUse: number
+  averageLatency: number
+  leaderCount: number
+  followerCount: number
+  raftProposals: number
+  raftCommitted: number
+  raftApplied: number
+}
+
+export interface MetricsResponse {
+  serverVersion: string
+  clusterId: string
+  members: MemberMetrics[] | null
+  summary: MetricsSummary
+  rawMetrics?: Record<string, any>
 }

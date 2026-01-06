@@ -17,6 +17,8 @@ import (
 	"github.com/zeed-w-beez/etcd-webui/backend/internal/logger"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ClusterConfig represents the etcd cluster configuration from frontend
@@ -444,6 +446,14 @@ func (h *Handler) GetKeyHistory(c *gin.Context) {
 	if revision > 0 {
 		resp, err = client.Get(ctx, key, clientv3.WithRev(revision), clientv3.WithLimit(1))
 		if err != nil {
+			// Check if error is due to revision being compacted
+			if st, ok := status.FromError(err); ok && st.Code() == codes.OutOfRange {
+				logger.Warn("Revision %d for key %s has been compacted", revision, key)
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("Revision %d has been compacted and is no longer available", revision),
+				})
+				return
+			}
 			logger.Error("Error fetching key %s at revision %d: %v", key, revision, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -508,15 +518,33 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 			startRev = 1
 		}
 
+		// Track if we've encountered a compacted revision
+		compactedEncountered := false
 		for rev := startRev; rev <= currentModRev; rev++ {
 			histResp, err := client.Get(ctx, key, clientv3.WithRev(rev), clientv3.WithLimit(1))
-			if err == nil && histResp.Count > 0 {
+			if err != nil {
+				// Check if error is due to revision being compacted
+				if st, ok := status.FromError(err); ok && st.Code() == codes.OutOfRange {
+					compactedEncountered = true
+					// Skip this revision and continue with next ones
+					continue
+				}
+				// For other errors, log but continue
+				logger.Debug("Error fetching key %s at revision %d: %v", key, rev, err)
+				continue
+			}
+			if histResp.Count > 0 {
 				histKv := histResp.Kvs[0]
 				version := histKv.Version
 				if existingRev, exists := versionsMap[version]; !exists || existingRev < histKv.ModRevision {
 					versionsMap[version] = histKv.ModRevision
 				}
 			}
+		}
+		
+		// If we encountered compacted revisions, log a warning
+		if compactedEncountered {
+			logger.Debug("Some revisions for key %s have been compacted, only available versions are returned", key)
 		}
 
 		for v := 1; v <= currentVersion; v++ {
@@ -829,6 +857,22 @@ func (h *Handler) Watch(c *gin.Context) {
 
 	// Send watch events to WebSocket client
 	for watchResp := range watchChan {
+		// Check for watch errors (e.g., revision compacted)
+		if watchResp.Err() != nil {
+			err := watchResp.Err()
+			// Check if error is due to revision being compacted
+			if st, ok := status.FromError(err); ok && st.Code() == codes.OutOfRange {
+				logger.Warn("Watch error: revision has been compacted for prefix %s", prefix)
+				conn.WriteJSON(gin.H{
+					"error": "Watch failed: the requested revision has been compacted. Please reconnect.",
+				})
+				return
+			}
+			logger.Error("Watch error for prefix %s: %v", prefix, err)
+			conn.WriteJSON(gin.H{"error": fmt.Sprintf("Watch error: %v", err)})
+			return
+		}
+		
 		for _, event := range watchResp.Events {
 			// Create WatchEvent from etcd event
 			watchEvent := WatchEvent{

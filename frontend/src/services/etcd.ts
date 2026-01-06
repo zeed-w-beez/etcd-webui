@@ -311,7 +311,16 @@ export const etcdApi = {
   async getClusterStatus(): Promise<ClusterStatus> {
     const response = await clusterRequest(`${API_BASE}/cluster/status`)
     if (!response.ok) {
-      throw new Error('Failed to fetch cluster status')
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to fetch cluster status')
+        } catch {
+          throw new Error(`Failed to fetch cluster status: HTTP ${response.status}`)
+        }
+      }
+      throw new Error(`Failed to fetch cluster status: HTTP ${response.status}`)
     }
     return response.json()
   },

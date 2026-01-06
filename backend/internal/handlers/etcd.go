@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,48 +48,186 @@ func NewClientManager() *ClientManager {
 	}
 }
 
+// normalizeEndpoint normalizes the etcd endpoint format
+// etcd clientv3 expects format: "host:port" (without protocol prefix)
+func normalizeEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return endpoint
+	}
+
+	originalEndpoint := endpoint
+
+	// Try to parse as URL first (handles http://, https://, and paths)
+	if parsedURL, err := url.Parse(endpoint); err == nil && parsedURL.Host != "" {
+		result := parsedURL.Host
+		logger.Debug("Parsed endpoint %s -> %s (scheme: %s)", originalEndpoint, result, parsedURL.Scheme)
+		return result
+	}
+
+	// If parsing failed, try adding http:// prefix and parse again
+	if parsedURL, err := url.Parse("http://" + endpoint); err == nil && parsedURL.Host != "" {
+		result := parsedURL.Host
+		logger.Debug("Parsed endpoint %s -> %s (added http://)", originalEndpoint, result)
+		return result
+	}
+
+	// Remove http:// or https:// prefix if present (fallback)
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+
+	if endpoint != originalEndpoint {
+		logger.Debug("Trimmed protocol prefix from %s -> %s", originalEndpoint, endpoint)
+	}
+
+	// Validate format: should be "host:port"
+	if !strings.Contains(endpoint, ":") {
+		logger.Warn("Endpoint %s does not contain port, this may cause issues", endpoint)
+	}
+
+	// Additional validation: ensure endpoint doesn't contain invalid characters
+	if strings.Contains(endpoint, "0.0.0.0") && !strings.Contains(originalEndpoint, "0.0.0.0") {
+		logger.Warn("Endpoint %s was normalized to %s, but contains 0.0.0.0 which may cause connection issues", originalEndpoint, endpoint)
+	}
+
+	return endpoint
+}
+
+// extractIPFromEndpoint extracts IP address from an endpoint string
+// Examples:
+//   - "http://172.16.171.54:8379" -> "172.16.171.54"
+//   - "172.16.171.54:8379" -> "172.16.171.54"
+func extractIPFromEndpoint(endpoint string) string {
+	normalized := normalizeEndpoint(endpoint)
+	// Extract IP:port, then get IP part
+	if idx := strings.Index(normalized, ":"); idx > 0 {
+		return normalized[:idx]
+	}
+	return normalized
+}
+
+// replaceZeroIP replaces 0.0.0.0 in endpoint with the provided IP address
+// Examples:
+//   - "http://0.0.0.0:8379" + "172.16.171.54" -> "http://172.16.171.54:8379"
+//   - "0.0.0.0:8379" + "172.16.171.54" -> "172.16.171.54:8379"
+func replaceZeroIP(endpoint, newIP string) string {
+	if !strings.Contains(endpoint, "0.0.0.0") {
+		return endpoint
+	}
+
+	// Replace 0.0.0.0 with new IP
+	result := strings.ReplaceAll(endpoint, "0.0.0.0", newIP)
+	logger.Debug("Replaced 0.0.0.0 in endpoint %s with IP %s -> %s", endpoint, newIP, result)
+	return result
+}
+
 // GetClient returns the etcd client for the given cluster ID, or creates a new one if it doesn't exist
 func (cm *ClientManager) GetClient(clusterConfig *ClusterConfig) (*clientv3.Client, error) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
+	// Normalize endpoint format first (remove http:// or https:// prefix)
+	normalizedEndpoint := normalizeEndpoint(clusterConfig.Endpoint)
+	if normalizedEndpoint != clusterConfig.Endpoint {
+		logger.Info("Normalized endpoint from %s to %s", clusterConfig.Endpoint, normalizedEndpoint)
+	}
+
+	// Create a normalized config copy for comparison
+	normalizedConfig := *clusterConfig
+	normalizedConfig.Endpoint = normalizedEndpoint
+
 	// Check if client already exists for this cluster
 	if client, exists := cm.clients[clusterConfig.ID]; exists {
-		// Check if configuration has changed
-		if cfg, exists := cm.configs[clusterConfig.ID]; exists && cfg.Endpoint == clusterConfig.Endpoint && cfg.Username == clusterConfig.Username && cfg.Password == clusterConfig.Password && cfg.DialTimeout == clusterConfig.DialTimeout {
-			return client, nil
+		// Check if configuration has changed (compare normalized endpoints)
+		if cfg, exists := cm.configs[clusterConfig.ID]; exists {
+			normalizedCfgEndpoint := normalizeEndpoint(cfg.Endpoint)
+			if normalizedCfgEndpoint == normalizedEndpoint &&
+				cfg.Username == clusterConfig.Username &&
+				cfg.Password == clusterConfig.Password &&
+				cfg.DialTimeout == clusterConfig.DialTimeout {
+				logger.Debug("Reusing existing etcd client for cluster %s (endpoint: %s)", clusterConfig.ID, normalizedEndpoint)
+				return client, nil
+			}
+			logger.Info("Configuration changed for cluster %s, closing old client", clusterConfig.ID)
 		}
 		// Close old client if configuration has changed
 		client.Close()
+		delete(cm.clients, clusterConfig.ID)
+		delete(cm.configs, clusterConfig.ID)
 	}
 
 	// Set default dial timeout if not provided
-	dialTimeout := 5 // Default 5 seconds
+	// Frontend sends timeout in milliseconds, convert to seconds
+	dialTimeoutSeconds := 5 // Default 5 seconds
 	if clusterConfig.DialTimeout > 0 {
-		dialTimeout = clusterConfig.DialTimeout
+		// Convert milliseconds to seconds (frontend sends ms, backend expects seconds)
+		if clusterConfig.DialTimeout > 1000 {
+			// If value is > 1000, assume it's in milliseconds
+			dialTimeoutSeconds = clusterConfig.DialTimeout / 1000
+		} else {
+			// If value is <= 1000, assume it's already in seconds
+			dialTimeoutSeconds = clusterConfig.DialTimeout
+		}
 	}
 
 	// Create new client
+	logger.Info("Creating new etcd client for cluster %s (endpoint: %s, timeout: %ds)", clusterConfig.ID, normalizedEndpoint, dialTimeoutSeconds)
 	clientConfig := clientv3.Config{
-		Endpoints:   []string{clusterConfig.Endpoint},
-		DialTimeout: time.Duration(dialTimeout) * time.Second,
+		Endpoints:   []string{normalizedEndpoint},
+		DialTimeout: time.Duration(dialTimeoutSeconds) * time.Second,
+		// Disable AutoSync to prevent client from using advertised addresses from server
+		// This ensures we always use the endpoint we specify
+		AutoSyncInterval: 0,
 	}
 
 	// Add authentication if provided
 	if clusterConfig.Username != "" && clusterConfig.Password != "" {
 		clientConfig.Username = clusterConfig.Username
 		clientConfig.Password = clusterConfig.Password
+		logger.Debug("Using authentication for cluster %s", clusterConfig.ID)
 	}
 
 	cli, err := clientv3.New(clientConfig)
 	if err != nil {
-		return nil, err
+		logger.Error("Failed to create etcd client for cluster %s (endpoint: %s): %v", clusterConfig.ID, normalizedEndpoint, err)
+		return nil, fmt.Errorf("failed to create etcd client: %w", err)
 	}
 
-	// Store client and configuration
-	cm.clients[clusterConfig.ID] = cli
-	cm.configs[clusterConfig.ID] = clusterConfig
+	// Verify the client endpoints are set correctly
+	actualEndpoints := cli.Endpoints()
+	if len(actualEndpoints) > 0 {
+		logger.Debug("Etcd client created with endpoints: %v", actualEndpoints)
+		if actualEndpoints[0] != normalizedEndpoint {
+			logger.Warn("Endpoint mismatch: expected %s, got %s", normalizedEndpoint, actualEndpoints[0])
+		}
+		// Validate endpoint doesn't contain 0.0.0.0
+		for _, ep := range actualEndpoints {
+			if strings.Contains(ep, "0.0.0.0") && !strings.Contains(normalizedEndpoint, "0.0.0.0") {
+				logger.Error("Endpoint was incorrectly resolved to %s (original: %s)", ep, normalizedEndpoint)
+				cli.Close()
+				return nil, fmt.Errorf("endpoint %s was incorrectly resolved to %s, check network configuration", normalizedEndpoint, ep)
+			}
+		}
+	}
 
+	// Test connection with a short timeout
+	testCtx, testCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer testCancel()
+
+	// Try to get status to verify connection
+	_, testErr := cli.Status(testCtx, normalizedEndpoint)
+	if testErr != nil {
+		logger.Warn("Initial connection test failed for cluster %s (endpoint: %s): %v", clusterConfig.ID, normalizedEndpoint, testErr)
+		logger.Info("Client created but connection test failed, this may be normal if etcd is starting up")
+		// Don't fail here, as the client might work later (e.g., if etcd is still starting)
+	} else {
+		logger.Debug("Connection test successful for cluster %s (endpoint: %s)", clusterConfig.ID, normalizedEndpoint)
+	}
+
+	// Store client and normalized configuration
+	cm.clients[clusterConfig.ID] = cli
+	cm.configs[clusterConfig.ID] = &normalizedConfig
+
+	logger.Info("Successfully created etcd client for cluster %s (endpoint: %s, actual endpoints: %v)", clusterConfig.ID, normalizedEndpoint, actualEndpoints)
 	return cli, nil
 }
 
@@ -206,8 +345,9 @@ func (h *Handler) ClusterMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Store client in context
+		// Store client and cluster config in context
 		c.Set("etcdClient", client)
+		c.Set("clusterConfig", &clusterConfig)
 		c.Next()
 	}
 }
@@ -541,7 +681,7 @@ func (h *Handler) GetKeyVersions(c *gin.Context) {
 				}
 			}
 		}
-		
+
 		// If we encountered compacted revisions, log a warning
 		if compactedEncountered {
 			logger.Debug("Some revisions for key %s have been compacted, only available versions are returned", key)
@@ -872,7 +1012,7 @@ func (h *Handler) Watch(c *gin.Context) {
 			conn.WriteJSON(gin.H{"error": fmt.Sprintf("Watch error: %v", err)})
 			return
 		}
-		
+
 		for _, event := range watchResp.Events {
 			// Create WatchEvent from etcd event
 			watchEvent := WatchEvent{
@@ -957,7 +1097,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 		return
 	}
 
-	// Get leader info from status of first endpoint
+	// Get leader info from status of endpoints
 	var leaderID uint64
 	var leaderNodeID string
 	var nodes []ClusterNode
@@ -967,11 +1107,34 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 	var raftTerm uint64
 	var raftAppliedIndex uint64
 
+	// Get the configured endpoint and extract IP address
+	configuredEndpoints := client.Endpoints()
+	var configuredIP string
+	var fallbackEndpoint string
+	if len(configuredEndpoints) > 0 {
+		fallbackEndpoint = configuredEndpoints[0]
+		configuredIP = extractIPFromEndpoint(fallbackEndpoint)
+		logger.Debug("Using configured endpoint: %s, extracted IP: %s", fallbackEndpoint, configuredIP)
+	}
+
 	for _, member := range memberList.Members {
 		// Try to get status for each endpoint
 		for _, endpoint := range member.ClientURLs {
-			status, err := client.Status(ctx, endpoint)
+			// If endpoint contains 0.0.0.0, replace it with the configured IP address
+			if strings.Contains(endpoint, "0.0.0.0") && configuredIP != "" {
+				endpoint = replaceZeroIP(endpoint, configuredIP)
+				logger.Debug("Replaced 0.0.0.0 in endpoint for member %d: %s", member.ID, endpoint)
+			}
+
+			// Normalize endpoint format
+			normalizedEndpoint := normalizeEndpoint(endpoint)
+			if normalizedEndpoint != endpoint {
+				logger.Debug("Normalized member endpoint from %s to %s", endpoint, normalizedEndpoint)
+			}
+
+			status, err := client.Status(ctx, normalizedEndpoint)
 			if err != nil {
+				logger.Debug("Failed to get status for endpoint %s (member %d): %v", normalizedEndpoint, member.ID, err)
 				continue
 			}
 
@@ -984,7 +1147,7 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 			node := ClusterNode{
 				ID:               fmt.Sprintf("%d", member.ID),
 				Name:             member.Name,
-				Endpoint:         endpoint,
+				Endpoint:         normalizedEndpoint,
 				Role:             "follower",
 				Version:          status.Version,
 				DBSize:           status.DbSize,
@@ -1002,15 +1165,28 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 
 			nodes = append(nodes, node)
 			totalDBSize += status.DbSize
+			logger.Debug("Successfully got status for endpoint %s (member %d)", normalizedEndpoint, member.ID)
 			break // Only use the first working endpoint for each member
 		}
 	}
 
-	// Get total keys count using a proper range query
+	logger.Info("Collected %d nodes, version=%s, leaderID=%d", len(nodes), etcdVersion, leaderID)
+
+	// Get total keys count using a proper range query (with shorter timeout to avoid blocking)
 	var totalKeys int64
-	keysResp, err := client.Get(ctx, "\x00", clientv3.WithFromKey(), clientv3.WithCountOnly())
+	keysCtx, keysCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer keysCancel()
+	keysResp, err := client.Get(keysCtx, "\x00", clientv3.WithFromKey(), clientv3.WithCountOnly())
 	if err == nil {
 		totalKeys = int64(keysResp.Count)
+	} else {
+		logger.Debug("Failed to get total keys count: %v", err)
+		// Continue without total keys count if it fails
+	}
+
+	// Ensure Members is always an array, never null
+	if nodes == nil {
+		nodes = []ClusterNode{}
 	}
 
 	c.JSON(http.StatusOK, ClusterStatus{

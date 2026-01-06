@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare, RefreshCw, Wrench } from 'lucide-react'
+import { Plus, Trash2, Search, Database, ChevronDown, ChevronRight, Server, Sun, Moon, RotateCcw, GitCompare, RefreshCw, Wrench, Check, Copy } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
@@ -645,6 +645,13 @@ function App() {
                     className="pl-9"
                   />
                 </div>
+                {!isLoading && keys.length === 100 && (searchPrefix === '/' || searchPrefix === '') && (
+                  <div className="mt-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
+                    <p className="text-xs text-blue-700 dark:text-blue-300">
+                      <span className="font-medium">提示：</span>当前仅显示前 100 个数据。您可以在搜索框中输入 prefix 来查看具体的数据。
+                    </p>
+                  </div>
+                )}
               </CardHeader>
                 <CardContent>
                   {isLoading ? (

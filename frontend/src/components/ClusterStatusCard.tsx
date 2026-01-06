@@ -34,7 +34,8 @@ export function ClusterStatusCard({ isConnected, onFeaturesUpdate, onOpenMainten
   useEffect(() => {
     if (isConnected) {
       fetchClusterStatus()
-      const interval = setInterval(fetchClusterStatus, 10000)
+      // Refresh cluster status every 30 seconds
+      const interval = setInterval(fetchClusterStatus, 30000)
       return () => clearInterval(interval)
     } else {
       setClusterStatus(null)
@@ -56,10 +57,12 @@ export function ClusterStatusCard({ isConnected, onFeaturesUpdate, onOpenMainten
         onFeaturesUpdate(status.features)
       }
     } catch (error) {
+      setClusterStatus(null)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch cluster status'
       toast({
         variant: 'destructive',
         title: 'Error',
-        description: 'Failed to fetch cluster status',
+        description: errorMessage,
       })
     } finally {
       setIsLoading(false)
@@ -211,7 +214,8 @@ export function ClusterStatusCard({ isConnected, onFeaturesUpdate, onOpenMainten
                   Nodes
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {clusterStatus.members.map((node) => (
+                  {clusterStatus.members && Array.isArray(clusterStatus.members) && clusterStatus.members.length > 0 ? (
+                    clusterStatus.members.map((node) => (
                     <div 
                       key={node.id} 
                       className={`p-3 rounded-lg border ${node.isLeader 
@@ -240,7 +244,12 @@ export function ClusterStatusCard({ isConnected, onFeaturesUpdate, onOpenMainten
                         </div>
                       </div>
                     </div>
-                  ))}
+                    ))
+                  ) : (
+                    <div className="col-span-2 text-center py-4 text-gray-500 dark:text-gray-400">
+                      <p>No cluster members information available</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -1594,35 +1594,83 @@ func (h *Handler) GetMetrics(c *gin.Context) {
 		clusterID = fmt.Sprintf("%x", statusResp.Header.ClusterId)
 		memberList, err := client.MemberList(ctx)
 		if err == nil {
-			for _, member := range memberList.Members {
-				for _, endpoint := range member.ClientURLs {
-					memberStatus, err := client.Status(ctx, endpoint)
-					if err != nil {
-						continue
+			// Get the configured endpoint and extract IP address for 0.0.0.0 replacement
+			configuredEndpoints := client.Endpoints()
+			var configuredIP string
+			if len(configuredEndpoints) > 0 {
+				configuredIP = extractIPFromEndpoint(configuredEndpoints[0])
+				logger.Debug("GetMetrics: Using configured IP: %s for 0.0.0.0 replacement", configuredIP)
+			}
+
+			// Use goroutines to fetch member metrics concurrently for better performance
+			type memberMetricsResult struct {
+				metrics MemberMetrics
+				err     error
+			}
+
+			resultChan := make(chan memberMetricsResult, len(memberList.Members))
+
+			for i := range memberList.Members {
+				member := memberList.Members[i]
+				go func(m *clientv3.Member) {
+					for _, endpoint := range m.ClientURLs {
+						// If endpoint contains 0.0.0.0, replace it with the configured IP address
+						if strings.Contains(endpoint, "0.0.0.0") && configuredIP != "" {
+							endpoint = replaceZeroIP(endpoint, configuredIP)
+							logger.Debug("GetMetrics: Replaced 0.0.0.0 in endpoint for member %d: %s", m.ID, endpoint)
+						}
+
+						// Normalize endpoint format
+						normalizedEndpoint := normalizeEndpoint(endpoint)
+						if normalizedEndpoint != endpoint {
+							logger.Debug("GetMetrics: Normalized member endpoint from %s to %s", endpoint, normalizedEndpoint)
+						}
+
+						memberStatus, err := client.Status(ctx, normalizedEndpoint)
+						if err != nil {
+							logger.Debug("GetMetrics: Failed to get status for endpoint %s (member %d): %v", normalizedEndpoint, m.ID, err)
+							continue
+						}
+
+						isLeader := memberStatus.Leader == memberStatus.Header.MemberId
+						memberMetrics := MemberMetrics{
+							Endpoint:           normalizedEndpoint,
+							IsLeader:           isLeader,
+							DBSize:             memberStatus.DbSize,
+							DBSizeInUse:        memberStatus.DbSizeInUse,
+							RaftIndex:          memberStatus.RaftIndex,
+							RaftTerm:           memberStatus.RaftTerm,
+							RaftAppliedIndex:   memberStatus.RaftAppliedIndex,
+							RaftCommittedIndex: memberStatus.RaftIndex, // Use RaftIndex as committed index approximation
+						}
+
+						logger.Debug("GetMetrics: Successfully got metrics for endpoint %s (member %d)", normalizedEndpoint, m.ID)
+						resultChan <- memberMetricsResult{metrics: memberMetrics, err: nil}
+						return
 					}
+					// If all endpoints failed, send an error result
+					resultChan <- memberMetricsResult{err: fmt.Errorf("all endpoints failed for member %d", m.ID)}
+				}(&clientv3.Member{
+					ID:         member.ID,
+					Name:       member.Name,
+					PeerURLs:   member.PeerURLs,
+					ClientURLs: member.ClientURLs,
+				})
+			}
 
-					isLeader := memberStatus.Leader == memberStatus.Header.MemberId
-					memberMetrics := MemberMetrics{
-						Endpoint:           endpoint,
-						IsLeader:           isLeader,
-						DBSize:             memberStatus.DbSize,
-						DBSizeInUse:        memberStatus.DbSizeInUse,
-						RaftIndex:          memberStatus.RaftIndex,
-						RaftTerm:           memberStatus.RaftTerm,
-						RaftAppliedIndex:   memberStatus.RaftAppliedIndex,
-						RaftCommittedIndex: memberStatus.RaftIndex, // Use RaftIndex as committed index approximation
-					}
+			// Collect results from all goroutines
+			for i := 0; i < len(memberList.Members); i++ {
+				result := <-resultChan
+				if result.err == nil {
+					members = append(members, result.metrics)
 
-					members = append(members, memberMetrics)
-
-					if isLeader {
+					if result.metrics.IsLeader {
 						summary.LeaderCount++
 					} else {
 						summary.FollowerCount++
 					}
-					summary.TotalDBSize += memberStatus.DbSize
-					summary.TotalDBSizeInUse += memberStatus.DbSizeInUse
-					break
+					summary.TotalDBSize += result.metrics.DBSize
+					summary.TotalDBSizeInUse += result.metrics.DBSizeInUse
 				}
 			}
 		}

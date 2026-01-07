@@ -1119,56 +1119,101 @@ func (h *Handler) ClusterStatus(c *gin.Context) {
 		logger.Debug("Using configured endpoint: %s, extracted IP: %s", fallbackEndpoint, configuredIP)
 	}
 
-	for _, member := range memberList.Members {
-		// Try to get status for each endpoint
-		for _, endpoint := range member.ClientURLs {
-			// If endpoint contains 0.0.0.0, replace it with the configured IP address
-			if strings.Contains(endpoint, "0.0.0.0") && configuredIP != "" {
-				endpoint = replaceZeroIP(endpoint, configuredIP)
-				logger.Debug("Replaced 0.0.0.0 in endpoint for member %d: %s", member.ID, endpoint)
+	// Use goroutines to fetch node status concurrently for better performance
+	type nodeStatusResult struct {
+		node    ClusterNode
+		dbSize  int64
+		leader  uint64
+		version string
+		raftIdx uint64
+		raftTrm uint64
+		raftApp uint64
+		err     error
+	}
+
+	resultChan := make(chan nodeStatusResult, len(memberList.Members))
+
+	for i := range memberList.Members {
+		member := memberList.Members[i]
+		go func(m *clientv3.Member) {
+			// Try to get status for each endpoint
+			for _, endpoint := range m.ClientURLs {
+				// If endpoint contains 0.0.0.0, replace it with the configured IP address
+				if strings.Contains(endpoint, "0.0.0.0") && configuredIP != "" {
+					endpoint = replaceZeroIP(endpoint, configuredIP)
+					logger.Debug("Replaced 0.0.0.0 in endpoint for member %d: %s", m.ID, endpoint)
+				}
+
+				// Normalize endpoint format
+				normalizedEndpoint := normalizeEndpoint(endpoint)
+				if normalizedEndpoint != endpoint {
+					logger.Debug("Normalized member endpoint from %s to %s", endpoint, normalizedEndpoint)
+				}
+
+				status, err := client.Status(ctx, normalizedEndpoint)
+				if err != nil {
+					logger.Debug("Failed to get status for endpoint %s (member %d): %v", normalizedEndpoint, m.ID, err)
+					continue
+				}
+
+				node := ClusterNode{
+					ID:               fmt.Sprintf("%d", m.ID),
+					Name:             m.Name,
+					Endpoint:         normalizedEndpoint,
+					Role:             "follower",
+					Version:          status.Version,
+					DBSize:           status.DbSize,
+					IsLeader:         m.ID == status.Leader,
+					StartTime:        time.Now().Format(time.RFC3339),
+					RaftIndex:        status.RaftIndex,
+					RaftTerm:         status.RaftTerm,
+					RaftAppliedIndex: status.RaftAppliedIndex,
+				}
+
+				resultChan <- nodeStatusResult{
+					node:    node,
+					dbSize:  status.DbSize,
+					leader:  status.Leader,
+					version: status.Version,
+					raftIdx: status.RaftIndex,
+					raftTrm: status.RaftTerm,
+					raftApp: status.RaftAppliedIndex,
+					err:     nil,
+				}
+				logger.Debug("Successfully got status for endpoint %s (member %d)", normalizedEndpoint, m.ID)
+				return // Only use the first working endpoint for each member
+			}
+			// If all endpoints failed, send an error result
+			resultChan <- nodeStatusResult{err: fmt.Errorf("all endpoints failed for member %d", m.ID)}
+		}(&clientv3.Member{
+			ID:         member.ID,
+			Name:       member.Name,
+			PeerURLs:   member.PeerURLs,
+			ClientURLs: member.ClientURLs,
+		})
+	}
+
+	// Collect results from all goroutines
+	for i := 0; i < len(memberList.Members); i++ {
+		result := <-resultChan
+		if result.err == nil {
+			// Use the first successful result to set cluster-wide values
+			if leaderID == 0 {
+				leaderID = result.leader
+				etcdVersion = result.version
+				raftIndex = result.raftIdx
+				raftTerm = result.raftTrm
+				raftAppliedIndex = result.raftApp
 			}
 
-			// Normalize endpoint format
-			normalizedEndpoint := normalizeEndpoint(endpoint)
-			if normalizedEndpoint != endpoint {
-				logger.Debug("Normalized member endpoint from %s to %s", endpoint, normalizedEndpoint)
+			// Update node role based on leader
+			if result.node.IsLeader {
+				result.node.Role = "leader"
+				leaderNodeID = result.node.ID
 			}
 
-			status, err := client.Status(ctx, normalizedEndpoint)
-			if err != nil {
-				logger.Debug("Failed to get status for endpoint %s (member %d): %v", normalizedEndpoint, member.ID, err)
-				continue
-			}
-
-			leaderID = status.Leader
-			etcdVersion = status.Version
-			raftIndex = status.RaftIndex
-			raftTerm = status.RaftTerm
-			raftAppliedIndex = status.RaftAppliedIndex
-
-			node := ClusterNode{
-				ID:               fmt.Sprintf("%d", member.ID),
-				Name:             member.Name,
-				Endpoint:         normalizedEndpoint,
-				Role:             "follower",
-				Version:          status.Version,
-				DBSize:           status.DbSize,
-				IsLeader:         member.ID == leaderID,
-				StartTime:        time.Now().Format(time.RFC3339),
-				RaftIndex:        status.RaftIndex,
-				RaftTerm:         status.RaftTerm,
-				RaftAppliedIndex: status.RaftAppliedIndex,
-			}
-
-			if node.IsLeader {
-				node.Role = "leader"
-				leaderNodeID = fmt.Sprintf("%d", member.ID)
-			}
-
-			nodes = append(nodes, node)
-			totalDBSize += status.DbSize
-			logger.Debug("Successfully got status for endpoint %s (member %d)", normalizedEndpoint, member.ID)
-			break // Only use the first working endpoint for each member
+			nodes = append(nodes, result.node)
+			totalDBSize += result.dbSize
 		}
 	}
 

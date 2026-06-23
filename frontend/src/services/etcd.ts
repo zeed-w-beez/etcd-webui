@@ -57,6 +57,17 @@ export interface KeyHistoryResponse {
   version: number
 }
 
+export interface KeyChild {
+  name: string
+  path: string
+  isLeaf: boolean
+}
+
+export interface KeyChildrenResponse {
+  children: KeyChild[]
+  truncated: boolean
+}
+
 export interface HealthStatus {
   status: 'healthy' | 'unhealthy'
   etcd: string
@@ -137,6 +148,23 @@ export const etcdApi = {
     
     const data = await response.json()
     return data.keys || []
+  },
+
+  async getKeyChildren(prefix?: string): Promise<KeyChildrenResponse> {
+    const params = new URLSearchParams()
+    if (prefix) {
+      params.set('prefix', prefix)
+    }
+
+    const queryString = params.toString()
+    const url = queryString ? `${API_BASE}/keys/children?${queryString}` : `${API_BASE}/keys/children`
+
+    const response = await clusterRequest(url)
+    if (!response.ok) {
+      throw new Error('Failed to fetch key children')
+    }
+
+    return response.json()
   },
 
   async getKey(key: string): Promise<EtcdKey> {

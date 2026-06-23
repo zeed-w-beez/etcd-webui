@@ -18,7 +18,7 @@ import { yaml } from '@codemirror/lang-yaml'
 import { etcdApi, type EtcdKey, type KeyVersionsResponse, type KeyHistoryResponse, type ClusterFeatures } from '@/services/etcd'
 import { useToast } from '@/hooks/use-toast'
 import { EtcdToaster } from '@/components/ui/toaster'
-import { type TreeItem, keysToTree } from '@/lib/utils'
+import { type TreeItem, childrenToTreeItems, updateTreeChildren } from '@/lib/utils'
 import { ClusterManager } from './components/ClusterManager'
 import { ClusterStatusCard } from './components/ClusterStatusCard'
 import { WatchPanel } from './components/WatchPanel'
@@ -26,12 +26,15 @@ import { MetricsPanel } from './components/MetricsPanel'
 import { SplitDiff } from '@/components/SplitDiff'
 
 function App() {
-  const [keys, setKeys] = useState<EtcdKey[]>([])
   const [tree, setTree] = useState<TreeItem[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [selectedKeyData, setSelectedKeyData] = useState<EtcdKey | null>(null)
   const [searchPrefix, setSearchPrefix] = useState('/')
   const [isConnected, setIsConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingKey, setIsLoadingKey] = useState(false)
+  const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set())
+  const [treeTruncated, setTreeTruncated] = useState(false)
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
   const [isAllExpanded, setIsAllExpanded] = useState(false)
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -81,12 +84,34 @@ function App() {
   const [copiedKey, setCopiedKey] = useState(false)
   const [copiedValue, setCopiedValue] = useState(false)
 
-  // Update editedValue when selectedKey changes
   useEffect(() => {
-    if (selectedKeyData) {
-      setEditedValue(selectedKeyData.value)
+    if (!selectedKey) {
+      setSelectedKeyData(null)
+      setKeyVersions(null)
+      return
     }
-    fetchKeyVersions(selectedKey)
+
+    const loadSelectedKey = async () => {
+      setIsLoadingKey(true)
+      try {
+        const data = await etcdApi.getKey(selectedKey)
+        setSelectedKeyData(data)
+        setEditedValue(data.value)
+        await fetchKeyVersions(selectedKey)
+      } catch (error) {
+        setSelectedKeyData(null)
+        setKeyVersions(null)
+        toast({
+          variant: 'destructive',
+          title: 'Error',
+          description: `Failed to load key "${selectedKey}": ${(error as Error).message}`,
+        })
+      } finally {
+        setIsLoadingKey(false)
+      }
+    }
+
+    loadSelectedKey()
   }, [selectedKey])
 
 
@@ -107,20 +132,21 @@ function App() {
   }
 
   useEffect(() => {
-    fetchKeys()
+    loadTreeRoot()
     checkHealth()
     
     const interval = setInterval(checkHealth, 10000)
     return () => clearInterval(interval)
   }, [])
 
-  const fetchKeys = async (prefix?: string, limit: number = 100) => {
+  const loadTreeRoot = async (prefix?: string) => {
     setIsLoading(true)
+    setExpandedNodes(new Set())
+    setIsAllExpanded(false)
     try {
-      const data = await etcdApi.getKeys(prefix, limit)
-      const sortedKeys = data.sort((a, b) => a.key.localeCompare(b.key))
-      setKeys(sortedKeys)
-      setTree(keysToTree(sortedKeys))
+      const data = await etcdApi.getKeyChildren(prefix ?? searchPrefix)
+      setTree(childrenToTreeItems(data.children))
+      setTreeTruncated(data.truncated)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -129,6 +155,42 @@ function App() {
       })
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const loadNodeChildren = async (nodePath: string) => {
+    const childPrefix = nodePath.endsWith('/') ? nodePath : `${nodePath}/`
+    setLoadingNodes((prev) => new Set(prev).add(nodePath))
+    try {
+      const data = await etcdApi.getKeyChildren(childPrefix)
+      setTree((prev) => updateTreeChildren(prev, nodePath, childrenToTreeItems(data.children)))
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: `Failed to load children for "${nodePath}"`,
+      })
+    } finally {
+      setLoadingNodes((prev) => {
+        const next = new Set(prev)
+        next.delete(nodePath)
+        return next
+      })
+    }
+  }
+
+  const refreshSelectedKey = async () => {
+    if (!selectedKey) return
+    try {
+      const data = await etcdApi.getKey(selectedKey)
+      setSelectedKeyData(data)
+      setEditedValue(data.value)
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: (error as Error).message,
+      })
     }
   }
 
@@ -168,20 +230,29 @@ function App() {
     }
   }
 
+  const handleNodeClick = async (node: TreeItem) => {
+    if (node.isLeaf) {
+      setSelectedKey(node.path)
+      return
+    }
+
+    const wasExpanded = isExpanded(node.path)
+    toggleExpand(node.path)
+
+    if (!wasExpanded && !node.loaded) {
+      await loadNodeChildren(node.path)
+    }
+  }
+
   const renderTreeNode = (node: TreeItem, level: number = 0) => {
     const isNodeExpanded = isExpanded(node.path)
+    const isNodeLoading = loadingNodes.has(node.path)
 
     return (
       <div key={node.key} className="space-y-1 mt-0.5">
         <div
-          onClick={() => {
-            if (node.isLeaf) {
-              setSelectedKey(node.key)
-            } else {
-              toggleExpand(node.path)
-            }
-          }}
-          className={`flex items-center gap-0.5 p-0.5 rounded-lg cursor-pointer transition-all ${selectedKey === node.key
+          onClick={() => handleNodeClick(node)}
+          className={`flex items-center gap-0.5 p-0.5 rounded-lg cursor-pointer transition-all ${selectedKey === node.path
             ? 'bg-violet-100 dark:bg-violet-900 border-violet-300 dark:border-violet-700 border'
             : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent'}
           `}
@@ -189,6 +260,8 @@ function App() {
         >
           {node.isLeaf ? (
             <div className="w-4" />
+          ) : isNodeLoading ? (
+            <RefreshCw className="h-4 w-4 text-gray-500 animate-spin" />
           ) : isNodeExpanded ? (
             <ChevronDown className="h-4 w-4 text-gray-500" />
           ) : (
@@ -197,11 +270,6 @@ function App() {
           <span className={`font-medium ${node.isLeaf ? 'text-gray-800 dark:text-gray-200' : 'text-violet-700 dark:text-violet-300'}`}>
             {node.name}
           </span>
-          {node.isLeaf && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 truncate ml-2">
-              {node.value && node.value.length > 20 ? `${node.value.slice(0, 20)}...` : node.value || ''}
-            </span>
-          )}
         </div>
         {node.children.length > 0 && isNodeExpanded && (
           <div>
@@ -222,7 +290,7 @@ function App() {
   }
 
   const handleSearch = () => {
-    fetchKeys(searchPrefix)
+    loadTreeRoot(searchPrefix)
   }
 
   const handleAddKey = async () => {
@@ -245,7 +313,7 @@ function App() {
       setIsAddDialogOpen(false)
       setNewKey('')
       setNewValue('')
-      fetchKeys(searchPrefix)
+      await loadTreeRoot(searchPrefix)
       setSelectedKey(newKey.trim())
     } catch (error) {
       toast({
@@ -267,7 +335,8 @@ function App() {
         description: 'Key updated successfully',
       })
       setIsEditDialogOpen(false)
-      fetchKeys(searchPrefix)
+      await refreshSelectedKey()
+      await loadTreeRoot(searchPrefix)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -289,7 +358,7 @@ function App() {
       })
       setIsDeleteDialogOpen(false)
       setSelectedKey(null)
-      fetchKeys(searchPrefix)
+      await loadTreeRoot(searchPrefix)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -314,7 +383,8 @@ function App() {
         title: 'Success',
         description: 'Key updated successfully',
       })
-      fetchKeys(searchPrefix)
+      await refreshSelectedKey()
+      await loadTreeRoot(searchPrefix)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -436,7 +506,7 @@ function App() {
         description: `Successfully compacted etcd to revision ${revision}`,
       })
       setCompactRevision('')
-      fetchKeys(searchPrefix)
+      await loadTreeRoot(searchPrefix)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -457,7 +527,7 @@ function App() {
         title: 'Success',
         description: 'Defragmentation completed successfully',
       })
-      fetchKeys(searchPrefix)
+      await loadTreeRoot(searchPrefix)
     } catch (error) {
       toast({
         variant: 'destructive',
@@ -468,8 +538,6 @@ function App() {
       setIsPerformingDefrag(false)
     }
   }
-
-  const selectedKeyData = keys.find(k => k.key === selectedKey)
 
   // Formatting functions
   const formatValue = (value: string, format: 'text' | 'json' | 'yaml'): string => {
@@ -641,7 +709,7 @@ function App() {
                         <ChevronDown className="h-4 w-4" />
                       }
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => fetchKeys(searchPrefix)}>
+                    <Button size="sm" variant="outline" onClick={() => loadTreeRoot(searchPrefix)}>
                       <RotateCcw className="h-4 w-4 mr-1" />
                       Refresh
                     </Button>
@@ -654,17 +722,17 @@ function App() {
                 <div className="relative mt-2">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
-                    placeholder="Search keys..."
+                    placeholder="Search prefix (e.g. /app)"
                     value={searchPrefix}
                     onChange={(e) => setSearchPrefix(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                     className="pl-9"
                   />
                 </div>
-                {!isLoading && keys.length === 100 && (searchPrefix === '/' || searchPrefix === '') && (
+                {!isLoading && treeTruncated && (
                   <div className="mt-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md">
                     <p className="text-xs text-blue-700 dark:text-blue-300">
-                      <span className="font-medium">提示：</span>当前仅显示前 100 个数据。您可以在搜索框中输入 prefix 来查看具体的数据。
+                      <span className="font-medium">提示：</span>当前目录扫描已达上限，可能未显示全部子路径。请缩小 prefix 范围后重试。
                     </p>
                   </div>
                 )}
@@ -674,7 +742,7 @@ function App() {
                     <div className="flex justify-center py-8">
                       <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600" />
                     </div>
-                  ) : keys.length === 0 ? (
+                  ) : tree.length === 0 ? (
                     <p className="text-center text-gray-500 py-8">No keys found</p>
                   ) : (
                     <div className="max-h-[600px] overflow-y-auto">
@@ -722,7 +790,11 @@ function App() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {selectedKey && selectedKeyData ? (
+                  {selectedKey && isLoadingKey ? (
+                    <div className="flex justify-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600" />
+                    </div>
+                  ) : selectedKey && selectedKeyData ? (
                     <div>
                       <div className="mb-4">
                         <div className="flex items-center justify-between mb-1">
@@ -829,7 +901,7 @@ function App() {
             </div>
           </>
         ) : activeView === 'clusters' ? (
-          <ClusterManager onClusterChange={fetchKeys} />
+          <ClusterManager onClusterChange={() => loadTreeRoot(searchPrefix)} />
         ) : activeView === 'watch' ? (
           <>
             {/* Cluster Status Card */}

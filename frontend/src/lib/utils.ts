@@ -10,9 +10,40 @@ export interface TreeItem {
   key: string
   name: string
   path: string
-  value?: string
   children: TreeItem[]
   isLeaf: boolean
+  loaded?: boolean
+}
+
+export interface KeyChild {
+  name: string
+  path: string
+  isLeaf: boolean
+}
+
+export function childrenToTreeItems(children: KeyChild[]): TreeItem[] {
+  return children
+    .map((child) => ({
+      key: child.path,
+      name: child.name,
+      path: child.path,
+      children: [],
+      isLeaf: child.isLeaf,
+      loaded: false,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export function updateTreeChildren(tree: TreeItem[], path: string, children: TreeItem[]): TreeItem[] {
+  return tree.map((node) => {
+    if (node.path === path) {
+      return { ...node, children, loaded: true }
+    }
+    if (node.children.length > 0) {
+      return { ...node, children: updateTreeChildren(node.children, path, children) }
+    }
+    return node
+  })
 }
 
 export function keysToTree(keys: EtcdKey[]): TreeItem[] {
@@ -46,7 +77,6 @@ export function keysToTree(keys: EtcdKey[]): TreeItem[] {
       }
 
       if (index === parts.length - 1) {
-        child.value = kv.value
         child.isLeaf = true
       }
 
@@ -64,7 +94,7 @@ export function flattenTree(tree: TreeItem[]): EtcdKey[] {
     if (node.isLeaf) {
       result.push({
         key: node.key,
-        value: node.value || ""
+        value: "",
       })
     }
     node.children.forEach(traverse)

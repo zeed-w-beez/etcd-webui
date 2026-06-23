@@ -50,6 +50,25 @@ describe('etcdApi', () => {
     })
   })
 
+  describe('getKeyChildren', () => {
+    it('should fetch children for prefix', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          children: [{ name: 'app', path: '/app', isLeaf: false }],
+          truncated: false,
+        }),
+      })
+      vi.spyOn(window, 'fetch').mockImplementation(fetchMock)
+
+      const result = await etcdApi.getKeyChildren('/')
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/keys/children?prefix=%2F')
+      expect(result.children).toHaveLength(1)
+      expect(result.truncated).toBe(false)
+    })
+  })
+
   describe('getKey', () => {
     it('should encode key with special characters', async () => {
       const mockKey: EtcdKey = {

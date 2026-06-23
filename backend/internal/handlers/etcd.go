@@ -593,9 +593,10 @@ func (h *Handler) GetKeyChildren(c *gin.Context) {
 
 	var allKeys []string
 	var truncated bool
-	lastKey := listPrefix
+	startKey := listPrefix
 	firstPage := true
 	scanned := int64(0)
+	rangeEnd := clientv3.GetPrefixRangeEnd(listPrefix)
 
 	for scanned < maxScan {
 		limit := pageSize
@@ -604,14 +605,12 @@ func (h *Handler) GetKeyChildren(c *gin.Context) {
 		}
 
 		opts := []clientv3.OpOption{
-			clientv3.WithPrefix(),
 			clientv3.WithKeysOnly(),
 			clientv3.WithLimit(limit),
+			clientv3.WithRange(rangeEnd),
 		}
-		startKey := listPrefix
 		if !firstPage {
 			opts = append(opts, clientv3.WithFromKey())
-			startKey = lastKey
 		}
 
 		resp, err := client.Get(ctx, startKey, opts...)
@@ -630,7 +629,7 @@ func (h *Handler) GetKeyChildren(c *gin.Context) {
 			break
 		}
 
-		lastKey = string(resp.Kvs[len(resp.Kvs)-1].Key)
+		startKey = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 		firstPage = false
 
 		if scanned >= maxScan {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -271,6 +272,17 @@ type KeysResponse struct {
 	Keys []EtcdKey `json:"keys"`
 }
 
+type KeyChild struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	IsLeaf bool   `json:"isLeaf"`
+}
+
+type KeyChildrenResponse struct {
+	Children  []KeyChild `json:"children"`
+	Truncated bool       `json:"truncated"`
+}
+
 type KeyResponse struct {
 	Key            string `json:"key"`
 	Value          string `json:"value"`
@@ -415,6 +427,11 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 }
 
 func (h *Handler) GetKeys(c *gin.Context) {
+	if c.Query("key") != "" {
+		h.GetKey(c)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
@@ -457,6 +474,174 @@ func (h *Handler) GetKeys(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"keys":  keys,
 		"count": resp.Count,
+	})
+}
+
+func normalizeListPrefix(prefix string) string {
+	if prefix == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	return prefix
+}
+
+func listPrefixForQuery(prefix string) string {
+	p := normalizeListPrefix(prefix)
+	if p == "/" {
+		return "/"
+	}
+	if !strings.HasSuffix(p, "/") {
+		return p + "/"
+	}
+	return p
+}
+
+func parentPrefixForChildPath(listPrefix string) string {
+	if listPrefix == "/" {
+		return "/"
+	}
+	return strings.TrimSuffix(listPrefix, "/")
+}
+
+func buildChildPath(parentPrefix, segment string) string {
+	if parentPrefix == "/" {
+		return "/" + segment
+	}
+	return parentPrefix + "/" + segment
+}
+
+func relativeToListPrefix(listPrefix, fullKey string) string {
+	if listPrefix == "/" {
+		return strings.TrimPrefix(fullKey, "/")
+	}
+	if strings.HasPrefix(fullKey, listPrefix) {
+		return strings.TrimPrefix(fullKey, listPrefix)
+	}
+	return ""
+}
+
+func extractKeyChildren(listPrefix string, keys []string) []KeyChild {
+	parentPrefix := parentPrefixForChildPath(listPrefix)
+	childMap := make(map[string]*KeyChild)
+
+	for _, fullKey := range keys {
+		relative := relativeToListPrefix(listPrefix, fullKey)
+		if relative == "" {
+			continue
+		}
+
+		segment := relative
+		if idx := strings.Index(relative, "/"); idx >= 0 {
+			segment = relative[:idx]
+		}
+		if segment == "" {
+			continue
+		}
+
+		child, ok := childMap[segment]
+		if !ok {
+			child = &KeyChild{
+				Name:   segment,
+				Path:   buildChildPath(parentPrefix, segment),
+				IsLeaf: true,
+			}
+			childMap[segment] = child
+		}
+
+		if strings.Contains(relative, "/") {
+			child.IsLeaf = false
+		}
+	}
+
+	children := make([]KeyChild, 0, len(childMap))
+	for _, child := range childMap {
+		children = append(children, *child)
+	}
+
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].Name < children[j].Name
+	})
+
+	return children
+}
+
+func (h *Handler) GetKeyChildren(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	client, err := h.GetClientFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "etcd client not available"})
+		return
+	}
+
+	listPrefix := listPrefixForQuery(c.Query("prefix"))
+
+	maxScan := int64(5000)
+	if scanLimit := c.Query("scanLimit"); scanLimit != "" {
+		if n, err := strconv.ParseInt(scanLimit, 10, 64); err == nil && n > 0 {
+			maxScan = n
+		}
+	}
+
+	pageSize := int64(500)
+	if maxScan < pageSize {
+		pageSize = maxScan
+	}
+
+	var allKeys []string
+	var truncated bool
+	lastKey := listPrefix
+	firstPage := true
+	scanned := int64(0)
+
+	for scanned < maxScan {
+		limit := pageSize
+		if scanned+limit > maxScan {
+			limit = maxScan - scanned
+		}
+
+		opts := []clientv3.OpOption{
+			clientv3.WithPrefix(),
+			clientv3.WithKeysOnly(),
+			clientv3.WithLimit(limit),
+		}
+		startKey := listPrefix
+		if !firstPage {
+			opts = append(opts, clientv3.WithFromKey())
+			startKey = lastKey
+		}
+
+		resp, err := client.Get(ctx, startKey, opts...)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		for _, kv := range resp.Kvs {
+			allKeys = append(allKeys, string(kv.Key))
+		}
+
+		scanned += int64(len(resp.Kvs))
+
+		if len(resp.Kvs) == 0 || !resp.More {
+			break
+		}
+
+		lastKey = string(resp.Kvs[len(resp.Kvs)-1].Key)
+		firstPage = false
+
+		if scanned >= maxScan {
+			truncated = true
+			break
+		}
+	}
+
+	c.JSON(http.StatusOK, KeyChildrenResponse{
+		Children:  extractKeyChildren(listPrefix, allKeys),
+		Truncated: truncated,
 	})
 }
 

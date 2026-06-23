@@ -132,3 +132,76 @@ func TestCreateAndDeleteKey(t *testing.T) {
 		t.Error("Key was not deleted from etcd")
 	}
 }
+
+func TestExtractKeyChildren(t *testing.T) {
+	children := extractKeyChildren("/", []string{
+		"/app/config",
+		"/app/db/host",
+		"/user",
+	})
+	if len(children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(children))
+	}
+
+	childMap := make(map[string]KeyChild)
+	for _, child := range children {
+		childMap[child.Name] = child
+	}
+
+	if childMap["app"].Path != "/app" || childMap["app"].IsLeaf {
+		t.Errorf("unexpected app child: %+v", childMap["app"])
+	}
+	if childMap["user"].Path != "/user" || !childMap["user"].IsLeaf {
+		t.Errorf("unexpected user child: %+v", childMap["user"])
+	}
+}
+
+func TestGetKeyChildren(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, cli := setupTestHandler(t)
+	defer cli.Close()
+
+	testKey := "/test-children-" + time.Now().Format("20060102150405")
+	ctx := context.Background()
+	cli.Put(ctx, testKey+"/app/config", "value1")
+	cli.Put(ctx, testKey+"/user", "value2")
+	defer cleanupKey(t, cli, testKey)
+
+	req, _ := http.NewRequest("GET", "/api/keys/children?prefix="+testKey, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Set("etcdClient", cli)
+
+	h.GetKeyChildren(c)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+func TestGetKeyViaGetKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, cli := setupTestHandler(t)
+	defer cli.Close()
+
+	testKey := "/test-get-key-" + time.Now().Format("20060102150405")
+	ctx := context.Background()
+	cli.Put(ctx, testKey, "detail-value")
+	defer cleanupKey(t, cli, testKey)
+
+	req, _ := http.NewRequest("GET", "/api/keys?key="+testKey, nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+	c.Set("etcdClient", cli)
+
+	h.GetKeys(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "detail-value") {
+		t.Fatalf("Expected key value in response, got %s", w.Body.String())
+	}
+}

@@ -93,6 +93,7 @@ func main() {
 	api.Use(h.ClusterMiddleware())
 	{
 		api.GET("/health", h.HealthCheck)
+		api.GET("/keys/children", h.GetKeyChildren)
 		api.GET("/keys", h.GetKeys)
 		api.POST("/keys", h.CreateKey)
 		api.PUT("/keys", h.UpdateKey)
